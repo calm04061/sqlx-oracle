@@ -1242,6 +1242,13 @@ dependencies = [
 [[package]]
 name = "sqlx-oracle-unit"
 version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dotenvy",
+ "sqlx",
+ "sqlx-oracle",
+ "tokio",
+]
 
 [[package]]
 name = "sqlx-postgres"
