@@ -21,7 +21,6 @@ jobs:
       startsWith(github.event.issue.body, '/opencode')
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: write
       pull-requests: write
       issues: write
@@ -31,11 +30,18 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install opencode v1.14.31
+        shell: bash
+        run: curl -fsSL https://opencode.ai/install | bash -s -- --version v1.14.31
+
+      - name: Add opencode to PATH
+        shell: bash
+        run: echo "$HOME/.opencode/bin" >> $GITHUB_PATH
+
       - name: Run opencode
-        uses: anomalyco/opencode/github@latest
+        shell: bash
+        run: opencode github run
         env:
-          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          MODEL: opencode/big-pickle
+          USE_GITHUB_TOKEN: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          model: opencode/big-pickle
-          use_github_token: true
