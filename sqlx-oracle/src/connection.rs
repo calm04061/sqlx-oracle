@@ -163,7 +163,7 @@ impl OracleConnection {
         let is_query = Self::sql_is_query(sql);
 
         let mut owned_args = arguments
-            .map(|args| build_sibyl_args(args))
+            .map(build_sibyl_args)
             .unwrap_or_default();
 
         let stmt = self.session.prepare(&oracle_sql).await.map_err(|e| {
@@ -202,12 +202,12 @@ impl OracleConnection {
                     Ok(Some(sibyl_row)) => {
                         let mut values = Vec::with_capacity(num_cols);
 
-                        for i in 0..num_cols {
+                        for (i, col) in columns.iter().enumerate() {
                             let is_null = sibyl_row.is_null(i);
                             if is_null {
                                 values.push(OracleValue {
                                     value: None,
-                                    type_info: columns[i].type_info.clone(),
+                                    type_info: col.type_info.clone(),
                                 });
                             } else {
                                 let text: String = sibyl_row.get(i).map_err(|e| {
@@ -217,7 +217,7 @@ impl OracleConnection {
                                 })?;
                                 values.push(OracleValue {
                                     value: Some(text.into_bytes()),
-                                    type_info: columns[i].type_info.clone(),
+                                    type_info: col.type_info.clone(),
                                 });
                             }
                         }
@@ -374,10 +374,10 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
 
             let mut result = None;
             while let Some(item) = stream.try_next().await? {
-                if let Either::Right(row) = item {
-                    if result.is_none() {
-                        result = Some(row);
-                    }
+                if let Either::Right(row) = item
+                    && result.is_none()
+                {
+                    result = Some(row);
                 }
             }
             Ok(result)
@@ -520,24 +520,116 @@ fn build_sibyl_args(args: &mut OracleArguments) -> Vec<Box<dyn sibyl::ToSql>> {
         .collect()
 }
 
+#[allow(unsafe_code)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sql_is_query_select() {
+        assert!(OracleConnection::sql_is_query("SELECT * FROM dual"));
+        assert!(OracleConnection::sql_is_query("select 1 from dual"));
+        assert!(OracleConnection::sql_is_query("  SELECT foo FROM bar"));
+    }
+
+    #[test]
+    fn test_sql_is_query_with() {
+        assert!(OracleConnection::sql_is_query("WITH cte AS (SELECT 1) SELECT * FROM cte"));
+    }
+
+    #[test]
+    fn test_sql_is_query_not_query() {
+        assert!(!OracleConnection::sql_is_query("INSERT INTO t VALUES (1)"));
+        assert!(!OracleConnection::sql_is_query("UPDATE t SET x = 1"));
+        assert!(!OracleConnection::sql_is_query("DELETE FROM t"));
+        assert!(!OracleConnection::sql_is_query("MERGE INTO t USING ..."));
+        assert!(!OracleConnection::sql_is_query(""));
+    }
+
+    #[test]
+    fn test_convert_placeholders_no_args() {
+        let sql = "SELECT 1 FROM dual";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 0), sql);
+    }
+
+    #[test]
+    fn test_convert_placeholders_simple() {
+        let sql = "SELECT * FROM t WHERE id = ? AND name = ?";
+        let expected = "SELECT * FROM t WHERE id = :1 AND name = :2";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 2), expected);
+    }
+
+    #[test]
+    fn test_convert_placeholders_skip_string_literals() {
+        let sql = "SELECT ? as col FROM t WHERE name = '?'";
+        let expected = "SELECT :1 as col FROM t WHERE name = '?'";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 1), expected);
+    }
+
+    #[test]
+    fn test_convert_placeholders_multiple_literals() {
+        let sql = "SELECT '?', ?, '?''?' FROM t WHERE x = ?";
+        let expected = "SELECT '?', :1, '?''?' FROM t WHERE x = :2";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 2), expected);
+    }
+
+    #[test]
+    fn test_convert_placeholders_none_provided() {
+        let sql = "SELECT ? FROM t";
+        // if num_params is 0, no conversion
+        assert_eq!(OracleConnection::convert_placeholders(sql, 0), sql);
+    }
+
+    #[test]
+    fn test_build_sibyl_args_empty() {
+        let mut args = OracleArguments::default();
+        let result = build_sibyl_args(&mut args);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_build_sibyl_args_types() {
+        let mut args = OracleArguments::default();
+        args.add(42i64).unwrap();
+        args.add(3.14f64).unwrap();
+        args.add(true).unwrap();
+        args.add("hello").unwrap();
+
+        let result = build_sibyl_args(&mut args);
+        assert_eq!(result.len(), 4);
+    }
+}
+
+#[allow(unsafe_code)]
 async fn run_query<'a>(
     stmt: &'a sibyl::Statement<'a>,
     owned_args: &mut Vec<Box<dyn sibyl::ToSql>>,
 ) -> Result<sibyl::Rows<'a>, Error> {
-    let taken = std::mem::take(owned_args);
-    let slice: &'static mut [Box<dyn sibyl::ToSql>] = Box::leak(taken.into_boxed_slice());
-    let mut refs: Vec<&mut dyn sibyl::ToSql> = slice.iter_mut().map(|b| &mut **b).collect();
+    let mut refs: Vec<&'static mut dyn sibyl::ToSql> = unsafe {
+        owned_args.iter_mut()
+            .map(|b| {
+                let r: &mut dyn sibyl::ToSql = &mut **b;
+                std::mem::transmute::<&mut dyn sibyl::ToSql, &'static mut dyn sibyl::ToSql>(r)
+            })
+            .collect()
+    };
     stmt.query(&mut refs).await
         .map_err(|e| Error::from(OracleDbError::new(format!("query failed: {e}"))))
 }
 
+#[allow(unsafe_code)]
 async fn run_execute<'a>(
     stmt: &'a sibyl::Statement<'a>,
     owned_args: &mut Vec<Box<dyn sibyl::ToSql>>,
 ) -> Result<usize, Error> {
-    let taken = std::mem::take(owned_args);
-    let slice: &'static mut [Box<dyn sibyl::ToSql>] = Box::leak(taken.into_boxed_slice());
-    let mut refs: Vec<&mut dyn sibyl::ToSql> = slice.iter_mut().map(|b| &mut **b).collect();
+    let mut refs: Vec<&'static mut dyn sibyl::ToSql> = unsafe {
+        owned_args.iter_mut()
+            .map(|b| {
+                let r: &mut dyn sibyl::ToSql = &mut **b;
+                std::mem::transmute::<&mut dyn sibyl::ToSql, &'static mut dyn sibyl::ToSql>(r)
+            })
+            .collect()
+    };
     stmt.execute(&mut refs).await
         .map_err(|e| Error::from(OracleDbError::new(format!("execute failed: {e}"))))
 }
