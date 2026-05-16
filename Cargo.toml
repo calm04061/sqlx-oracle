@@ -1,8 +1,13 @@
 [workspace]
-members = ["sqlx-oracle"]
+members = ["sqlx-oracle", "sqlx-oracle-unit"]
 resolver = "3"
 [workspace.dependencies]
 sqlx = "0.8.6"
 dotenvy = "0.15.7"
 sibyl = { version = "0.7.0", features = ["nonblocking", "tokio"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
+futures-core = "0.3.32"
+futures-util = "0.3.32"
+once_cell = "1.21.4"
+parking_lot = "0.12.5"
+url = "2.5.8"
