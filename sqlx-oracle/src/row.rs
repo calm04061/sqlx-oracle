@@ -7,6 +7,9 @@ use sqlx_core::column::ColumnIndex;
 use sqlx_core::error::Error;
 use sqlx_core::value::Value;
 
+/// Oracle 查询结果行。
+///
+/// 包含列元数据和列值，支持按序号和按名称（大小写不敏感）访问。
 #[derive(Debug, Clone)]
 pub struct OracleRow {
     pub(crate) columns: Vec<OracleColumn>,

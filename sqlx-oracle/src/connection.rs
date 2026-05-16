@@ -25,11 +25,19 @@ use crate::{
     Oracle, OracleArguments, OracleColumn, OracleQueryResult, OracleTypeInfo, OracleValue,
 };
 
+/// 全局 OCI 环境（懒初始化）。
 pub(crate) static OCI_ENV: OnceCell<sibyl::Environment> = OnceCell::new();
 
+/// Oracle 数据库连接。
+///
+/// 包装 `sibyl::Session`，提供 sqlx 框架所需的 `Connection` 和 `Executor` trait 实现。
+/// 内部处理占位符转换（`?` → `:n`）、OCI 会话管理和类型映射。
 pub struct OracleConnection {
+    /// sibyl OCI 会话（'static 生命周期由 OCI_ENV 保证）
     session: sibyl::Session<'static>,
+    /// 当前事务嵌套深度
     pub(crate) transaction_depth: usize,
+    /// 日志设置
     log_settings: LogSettings,
 }
 
@@ -43,10 +51,16 @@ impl Debug for OracleConnection {
 }
 
 impl OracleConnection {
+    /// 建立到 Oracle 数据库的连接。
+    ///
+    /// URL 格式：`oracle://user:password@host:port/service_name`
+    ///
+    /// 连接建立后自动设置 NLS 会话参数以确保日期/时间格式与 chrono 解析一致。
     pub(crate) async fn establish(
         url: &str,
         log_settings: LogSettings,
     ) -> Result<Self, Error> {
+        // 解析连接 URL
         let parsed = Url::parse(url).map_err(|e| {
             Error::protocol(format!("invalid database URL: {e}"))
         })?;
@@ -79,11 +93,13 @@ impl OracleConnection {
             format!("{host}:{port}")
         };
 
+        // 初始化全局 OCI 环境（仅首次调用时创建）
         let env = OCI_ENV
             .get_or_try_init(|| sibyl::env().map_err(|e| {
                 Error::protocol(format!("failed to create OCI environment: {e}"))
             }))?;
 
+        // 建立会话
         let session = env
             .connect(&dbname, &username, &password)
             .await
@@ -91,6 +107,7 @@ impl OracleConnection {
                 Error::from(OracleDbError::new(format!("failed to connect: {e}")))
             })?;
 
+        // 设置 NLS 参数，确保与 chrono 的 ISO 8601 格式兼容
         {
             let nls_stmt = session.prepare(
                 "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS' \
@@ -111,6 +128,7 @@ impl OracleConnection {
         })
     }
 
+    /// 判断 SQL 是否为查询（以 SELECT 或 WITH 开头）。
     fn sql_is_query(sql: &str) -> bool {
         let sql = sql.trim();
         if sql.is_empty() {
@@ -124,6 +142,9 @@ impl OracleConnection {
         first == "SELECT" || first == "WITH"
     }
 
+    /// 将 SQL 中的 `?` 占位符转换为 Oracle 的 `:n` 命名参数格式。
+    ///
+    /// 跳过字符串字面量（单引号包裹）内的 `?`，保持其原样。
     fn convert_placeholders(sql: &str, num_params: usize) -> String {
         if num_params == 0 {
             return sql.to_owned();
@@ -135,6 +156,7 @@ impl OracleConnection {
 
         while let Some(ch) = chars.next() {
             match ch {
+                // 跳过字符串字面量
                 '\'' => {
                     result.push(ch);
                     while let Some(&next) = chars.peek() {
@@ -159,6 +181,9 @@ impl OracleConnection {
         result
     }
 
+    /// 核心执行方法：准备语句、执行并返回结果流。
+    ///
+    /// 区分查询和 DML：查询返回行流，DML 返回受影响行数。
     async fn execute_or_query(
         &mut self,
         sql: &str,
@@ -175,15 +200,18 @@ impl OracleConnection {
         let oracle_sql = Self::convert_placeholders(sql, num_params);
         let is_query = Self::sql_is_query(sql);
 
+        // 将 sqlx 统一参数转换为 sibyl 的 ToSql trait 对象
         let mut owned_args = arguments
             .map(build_sibyl_args)
             .unwrap_or_default();
 
+        // 在 OCI 侧预编译语句
         let stmt = self.session.prepare(&oracle_sql).await.map_err(|e| {
             Error::from(OracleDbError::new(format!("prepare failed: {e}")))
         })?;
 
         if is_query {
+            // 查询路径：获取列元数据，读取所有行到内存后返回
             let num_cols = stmt.column_count().map_err(|e| {
                 Error::from(OracleDbError::new(format!("get column count failed: {e}")))
             })?;
@@ -209,6 +237,7 @@ impl OracleConnection {
 
             let rows = run_query(&stmt, &mut owned_args).await?;
 
+            // 将所有行读入内存（当前实现未使用流式游标）
             let mut collected: Vec<Either<OracleQueryResult, OracleRow>> = Vec::new();
             loop {
                 match rows.next().await {
@@ -259,6 +288,7 @@ impl OracleConnection {
                 Ok(())
             })
         } else {
+            // DML 路径：执行并返回影响行数
             let affected = run_execute(&stmt, &mut owned_args).await?;
 
             let result = OracleQueryResult {
@@ -491,6 +521,7 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
     }
 }
 
+/// 将 sibyl 列类型映射到本 crate 的 `OracleTypeInfo`。
 fn oracle_type_from_sibyl(col_type: sibyl::ColumnType) -> OracleTypeInfo {
     use sibyl::ColumnType as SCT;
     match col_type {
@@ -519,6 +550,7 @@ fn oracle_type_from_sibyl(col_type: sibyl::ColumnType) -> OracleTypeInfo {
     }
 }
 
+/// 将 sqlx 参数转换为 sibyl 的 `ToSql` trait 对象向量。
 fn build_sibyl_args(args: &mut OracleArguments) -> Vec<Box<dyn sibyl::ToSql>> {
     args.buffer
         .values
@@ -589,7 +621,7 @@ mod tests {
     #[test]
     fn test_convert_placeholders_none_provided() {
         let sql = "SELECT ? FROM t";
-        // if num_params is 0, no conversion
+        // num_params 为 0 时不替换
         assert_eq!(OracleConnection::convert_placeholders(sql, 0), sql);
     }
 
@@ -613,6 +645,13 @@ mod tests {
     }
 }
 
+/// 执行查询并返回行集。
+///
+/// # Safety
+/// sibyl 的 `query()` 方法需要 `&mut [&mut dyn ToSql]` 参数，
+/// 但 `Box<dyn ToSql>` 的生命周期无法直接表达。这里使用
+/// `transmute` 将生命周期扩展到 `'static`，实际使用范围受
+/// `stmt.query()` 调用的词法作用域限制，是安全的。
 #[allow(unsafe_code)]
 async fn run_query<'a>(
     stmt: &'a sibyl::Statement<'a>,
@@ -630,6 +669,10 @@ async fn run_query<'a>(
         .map_err(|e| Error::from(OracleDbError::new(format!("query failed: {e}"))))
 }
 
+/// 执行 DML 并返回影响行数。
+///
+/// # Safety
+/// 同 `run_query`，需要对生命周期进行 transmute 以适配 sibyl 签名。
 #[allow(unsafe_code)]
 async fn run_execute<'a>(
     stmt: &'a sibyl::Statement<'a>,

@@ -1,5 +1,8 @@
 use std::iter::{Extend, IntoIterator};
 
+/// Oracle 查询结果（DML）。
+///
+/// 记录受影响的记录行数。
 #[derive(Debug, Default)]
 pub struct OracleQueryResult {
     pub rows_affected: u64,

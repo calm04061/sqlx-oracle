@@ -1,3 +1,10 @@
+//! 构建脚本 —— 自动下载并链接 Oracle Instant Client。
+//!
+//! sibyl crate 的 build.rs 固定输出 `cargo:rustc-link-lib=dylib=clntsh`，
+//! 因此必须在链接前确保 `libclntsh.dylib` / `.so` / `.dll` 可用。
+//! 本脚本根据目标平台自动下载对应 Oracle Instant Client Basic Light 包，
+//! 解压到 `OUT_DIR/instantclient`，并设置 `rustc-link-search` 和 rpath。
+
 use std::path::Path;
 
 fn main() {
@@ -6,10 +13,9 @@ fn main() {
 
     enum PkgKind { Zip, Dmg }
 
-    // Verified download URLs from https://www.oracle.com/database/technologies/instant-client/
-    // macOS ARM64 / Intel: permanent links (serve latest version)
-    // Linux: permanent link
-    // Windows: versioned URL (no permanent link available for otn_software)
+    // Oracle Instant Client 下载地址（来自 Oracle 官方永久链接）
+    // macOS: 永久链接，自动指向最新版本
+    // Linux / Windows: 固定版本号
     let win_ver = "23.26.1.0.0";
     let win_code = "2326100";
 
@@ -41,7 +47,7 @@ fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let lib_dir = Path::new(&out_dir).join("instantclient");
 
-    // Marker: we assume extraction is done if lib_dir exists and contains libclntsh
+    // 标记文件：存在即表示已解压完成
     let marker = lib_dir.join(".extracted");
 
     if !marker.exists() {
@@ -57,15 +63,17 @@ fn main() {
             PkgKind::Dmg => extract_dmg(&pkg.0, &lib_dir),
         }
 
-        // After extraction, ensure libclntsh.dylib / libclntsh.so exists (create symlink if needed)
+        // 确保 `libclntsh.dylib` / `libclntsh.so` 存在（必要时创建符号链接）
         ensure_libclntsh(&lib_dir, target_os.as_str());
 
         std::fs::write(&marker, b"").unwrap();
         println!("cargo:warning=Oracle Instant Client ready at {}", lib_dir.display());
     }
 
+    // 通知链接器搜索路径
     println!("cargo:rustc-link-search={}", lib_dir.display());
 
+    // macOS 需要设置 rpath 才能在运行时找到 dylib
     if target_os == "macos" {
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
     }
@@ -73,6 +81,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_ORACLE");
 }
 
+/// 运行外部命令并检查是否成功。
 fn run(prog: &str, args: &[&str]) {
     let status = std::process::Command::new(prog)
         .args(args)
@@ -81,6 +90,7 @@ fn run(prog: &str, args: &[&str]) {
     assert!(status.success(), "`{prog}` failed");
 }
 
+/// 运行外部命令并捕获 stdout。
 fn run_output(prog: &str, args: &[&str]) -> String {
     let out = std::process::Command::new(prog)
         .args(args)
@@ -90,25 +100,27 @@ fn run_output(prog: &str, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).to_string()
 }
 
+/// 使用 curl 下载文件。
 fn download(url: &str, dest: &Path) {
     run("curl", &["-L", "-o", &dest.to_string_lossy(), "--fail", url]);
 }
 
+/// 解压 .zip 包到目标目录，并展平单子目录结构。
 fn extract_zip(url: &str, dest: &Path) {
     let archive = dest.join("pkg.zip");
     download(url, &archive);
-    // unzip to parent so files land in dest (we cd'd via -d dest)
     run("unzip", &["-q", "-o", &archive.to_string_lossy(), "-d", &dest.to_string_lossy()]);
     let _ = std::fs::remove_file(&archive);
-    // Flatten: if a single subdir was created, move its contents up
+    // 如果解压后只有一个子目录，将其内容上移一层
     flatten_single_subdir(dest);
 }
 
+/// 挂载 .dmg、复制内容并弹出。
 fn extract_dmg(url: &str, dest: &Path) {
     let dmg = dest.join("pkg.dmg");
     download(url, &dmg);
 
-    // Mount and capture mount point
+    // 挂载 DMG 并捕获挂载点路径
     let out = run_output("hdiutil", &[
         "attach", "-nobrowse", "-mountrandom", "/tmp",
         &dmg.to_string_lossy(),
@@ -126,7 +138,7 @@ fn extract_dmg(url: &str, dest: &Path) {
     let _ = std::fs::remove_file(&dmg);
 }
 
-/// If the extraction created a single subdirectory, move everything up one level.
+/// 如果解压创建了单一子目录，将其内容上移并删除空壳。
 fn flatten_single_subdir(dir: &Path) {
     let entries: Vec<_> = std::fs::read_dir(dir).unwrap()
         .filter_map(|e| e.ok())
@@ -142,7 +154,7 @@ fn flatten_single_subdir(dir: &Path) {
                 let _ = std::fs::remove_dir_all(&dest_path);
             }
             std::fs::rename(&entry.path(), &dest_path).unwrap_or_else(|_| {
-                // fallback: copy & remove
+                // 跨设备回退：复制后删除
                 run("cp", &["-Rp", &entry.path().to_string_lossy(), &dest_path.to_string_lossy()]);
                 let _ = std::fs::remove_dir_all(&entry.path());
             });
@@ -151,7 +163,10 @@ fn flatten_single_subdir(dir: &Path) {
     }
 }
 
-/// Find libclntsh* and create `libclntsh.dylib` (or .so) symlink if it doesn't exist.
+/// 在 Instant Client 目录中找到 `libclntsh*` 并确保 `libclntsh.{dylib,so,dll}` 存在。
+///
+/// Oracle 分发的 dylib 文件名带版本后缀（如 `libclntsh.dylib.23.1`），
+/// 链接器需要精确的 `libclntsh.dylib` 名称，此处创建符号链接。
 fn ensure_libclntsh(dir: &Path, os: &str) {
     let want = format!("libclntsh.{}", match os {
         "macos" => "dylib",
@@ -161,12 +176,11 @@ fn ensure_libclntsh(dir: &Path, os: &str) {
     });
     let target = dir.join(&want);
 
-    // Already present?
     if target.exists() {
         return;
     }
 
-    // Look for any libclntsh* file
+    // 查找任意 libclntsh 开头的文件
     let found: Vec<_> = std::fs::read_dir(dir).unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name())
@@ -181,7 +195,7 @@ fn ensure_libclntsh(dir: &Path, os: &str) {
         );
     }
 
-    // Create symlink from the first found file
+    // 为第一个找到的版本化文件创建符号链接
     let src = found[0].clone();
     #[cfg(unix)]
     {

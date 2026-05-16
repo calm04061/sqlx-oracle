@@ -2,6 +2,9 @@ use crate::OracleTypeInfo;
 use crate::Oracle;
 use sqlx_core::column::Column;
 
+/// Oracle 列元数据。
+///
+/// 包含列序号、列名（来自 OCI）和 Oracle 类型信息。
 #[derive(Debug, Clone)]
 pub struct OracleColumn {
     pub ordinal: usize,

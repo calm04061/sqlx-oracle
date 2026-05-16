@@ -5,12 +5,19 @@ use crate::OracleTypeInfo;
 use crate::Oracle;
 use sqlx_core::value::{Value, ValueRef};
 
+/// 列值（拥有所有权）。
+///
+/// 以 `Option<Vec<u8>>` 形式存储原始字节数据，目前所有类型
+/// 均通过文本格式编解码。
 #[derive(Debug, Clone)]
 pub struct OracleValue {
     pub value: Option<Vec<u8>>,
     pub type_info: OracleTypeInfo,
 }
 
+/// 列值引用。
+///
+/// 借自 `OracleRow` 中的值，用于 `Decode` 实现中零拷贝读取。
 #[derive(Clone)]
 pub struct OracleValueRef<'r> {
     pub value: Option<&'r [u8]>,

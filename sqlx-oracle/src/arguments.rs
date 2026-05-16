@@ -7,6 +7,10 @@ use sqlx_core::types::Type;
 
 use crate::Oracle;
 
+/// Oracle 绑定值类型枚举。
+///
+/// 支持 NULL、字符串、整数、浮点数和布尔值五种类型。
+/// 所有 `Encode` 实现最终都将 Rust 值转换为此枚举变体之一。
 #[derive(Debug, Clone)]
 pub enum OracleBindValue {
     Null,
@@ -16,6 +20,9 @@ pub enum OracleBindValue {
     Bool(bool),
 }
 
+/// 绑定值缓冲区。
+///
+/// 作为 `Encode` 的输出目标，收集所有绑定的参数值。
 #[derive(Debug, Default, Clone)]
 pub struct OracleArgumentBuffer {
     pub(crate) values: Vec<OracleBindValue>,
@@ -35,6 +42,10 @@ impl OracleArgumentBuffer {
     }
 }
 
+/// Oracle 查询参数集合。
+///
+/// 实现 `sqlx::Arguments`，包装 `OracleArgumentBuffer`，
+/// 供 sqlx 查询构建器统一添加参数。
 #[derive(Debug, Default, Clone)]
 pub struct OracleArguments {
     pub(crate) buffer: OracleArgumentBuffer,

@@ -6,6 +6,10 @@ use sqlx_core::types::Type;
 use crate::arguments::OracleBindValue;
 use crate::{Oracle, OracleArgumentBuffer, OracleTypeInfo, OracleValueRef};
 
+// ===========================================================================
+// Encode 实现：Rust 值 → Oracle 绑定值
+// ===========================================================================
+
 impl<'q> Encode<'q, Oracle> for &str {
     fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
         buf.push(OracleBindValue::String((*self).to_owned()));
@@ -53,8 +57,11 @@ impl<'q> Encode<'q, Oracle> for bool {
     }
 }
 
+// ===========================================================================
+// Decode 实现：Oracle 文本值 → Rust 值
+// ===========================================================================
 
-
+/// 从列值中解码文本内容。
 fn decode_text(value: OracleValueRef<'_>) -> Result<String, BoxDynError> {
     let bytes = value.value.ok_or("unexpected null")?;
     Ok(String::from_utf8_lossy(bytes).into_owned())
@@ -98,6 +105,10 @@ impl<'r> Decode<'r, Oracle> for bool {
     }
 }
 
+// ===========================================================================
+// Type 映射：Rust 类型 → Oracle 数据类型
+// ===========================================================================
+
 impl Type<Oracle> for String {
     fn type_info() -> OracleTypeInfo {
         OracleTypeInfo::Varchar2
@@ -136,9 +147,9 @@ impl Type<Oracle> for bool {
 
 sqlx_core::impl_encode_for_option!(Oracle);
 
-// ---------------------------------------------------------------------------
-// Vec<u8> — encoded as hex string (for RAW / BLOB columns)
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// Vec<u8> —— 以十六进制字符串编码（用于 RAW / BLOB 列）
+// ===========================================================================
 
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -197,9 +208,14 @@ impl Type<Oracle> for Vec<u8> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// chrono types — NLS set to ISO 8601 on connect
-// ---------------------------------------------------------------------------
+// ===========================================================================
+// chrono 时间类型 —— 连接时 NLS 已设为 ISO 8601 格式
+// ===========================================================================
+//
+// NaiveDateTime → TIMESTAMP
+// NaiveDate     → DATE（可能包含时间部分，尝试两种格式）
+// NaiveTime     → DATE（Oracle 总是返回完整时间戳，取时间部分）
+// DateTime<Utc> → TIMESTAMP WITH TIME ZONE
 
 impl<'q> Encode<'q, Oracle> for chrono::NaiveDateTime {
     fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
@@ -227,8 +243,6 @@ impl Type<Oracle> for chrono::NaiveDateTime {
     }
 }
 
-// ---- NaiveDate -----------------------------------------------------------
-
 impl<'q> Encode<'q, Oracle> for chrono::NaiveDate {
     fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
         buf.push(OracleBindValue::String(self.format("%Y-%m-%d").to_string()));
@@ -244,7 +258,6 @@ impl<'q> Encode<'q, Oracle> for chrono::NaiveDate {
 impl<'r> Decode<'r, Oracle> for chrono::NaiveDate {
     fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
         let s = decode_text(value)?;
-        // Oracle DATE includes time with NLS set; try date-only first, then full datetime
         chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
             .or_else(|_| {
                 chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
@@ -259,8 +272,6 @@ impl Type<Oracle> for chrono::NaiveDate {
         OracleTypeInfo::Date
     }
 }
-
-// ---- NaiveTime -----------------------------------------------------------
 
 impl<'q> Encode<'q, Oracle> for chrono::NaiveTime {
     fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
@@ -277,7 +288,6 @@ impl<'q> Encode<'q, Oracle> for chrono::NaiveTime {
 impl<'r> Decode<'r, Oracle> for chrono::NaiveTime {
     fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
         let s = decode_text(value)?;
-        // Oracle gives "YYYY-MM-DD HH:MM:SS.FF" for DATE columns — try time-only first
         chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")
             .or_else(|_| {
                 chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
@@ -292,8 +302,6 @@ impl Type<Oracle> for chrono::NaiveTime {
         OracleTypeInfo::Date
     }
 }
-
-// ---- DateTime<Utc> -------------------------------------------------------
 
 impl<'q> Encode<'q, Oracle> for chrono::DateTime<chrono::Utc> {
     fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {

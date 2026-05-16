@@ -2,6 +2,10 @@ use std::fmt;
 
 use sqlx_core::error::{DatabaseError, ErrorKind};
 
+/// Oracle 数据库错误。
+///
+/// 包装 OCI/sibyl 层返回的错误消息，实现 `DatabaseError` trait
+/// 以便 sqlx 统一处理。
 #[derive(Debug)]
 pub struct OracleDbError {
     pub message: String,

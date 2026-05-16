@@ -1,3 +1,5 @@
+# opencode AI 辅助工作流
+# 当 issue / PR 评论中出现 /oc 或 /opencode 时自动触发
 name: opencode
 
 on:
@@ -10,6 +12,7 @@ on:
 
 jobs:
   opencode:
+    # 仅在包含触发指令时运行
     if: |
       contains(github.event.comment.body, ' /oc') ||
       startsWith(github.event.comment.body, '/oc') ||
@@ -42,6 +45,7 @@ jobs:
         shell: bash
         run: opencode github run
         env:
+          # 使用 big-pickle 模型
           MODEL: opencode/big-pickle
           USE_GITHUB_TOKEN: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

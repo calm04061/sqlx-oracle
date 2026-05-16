@@ -7,6 +7,9 @@ use crate::OracleTypeInfo;
 use sqlx_core::statement::Statement;
 use sqlx_core::Either;
 
+/// 预编译语句。
+///
+/// 保存转换后的 Oracle SQL（`?` → `:n` 格式）以及查询结果列元数据。
 #[derive(Debug, Clone)]
 pub struct OracleStatement<'q> {
     pub(crate) sql: Cow<'q, str>,

@@ -7,6 +7,10 @@ use crate::{OracleConnection, Oracle};
 use sqlx_core::error::Error;
 use sqlx_core::executor::Executor;
 
+/// Oracle 事务管理器。
+///
+/// 通过 ANSI 标准 SQL (`BEGIN` / `COMMIT` / `ROLLBACK`) 管理事务，
+/// 利用 `transaction_depth` 支持嵌套事务（保存点）。
 pub struct OracleTransactionManager;
 
 impl TransactionManager for OracleTransactionManager {

@@ -2,6 +2,7 @@
 name = "sqlx-oracle-unit"
 version = "0.1.0"
 edition = "2024"
+description = "Integration tests for the sqlx-oracle driver"
 
 [dependencies]
 sqlx-oracle = { path = "../sqlx-oracle" }

@@ -11,6 +11,10 @@ use sqlx_core::error::Error;
 
 use crate::OracleConnection;
 
+/// Oracle 连接配置。
+///
+/// 保存数据库 URL 和日志设置，通过 `ConnectOptions` trait
+/// 供 sqlx 框架统一调用。
 #[derive(Debug, Clone)]
 pub struct OracleConnectOptions {
     pub(crate) database_url: String,
@@ -46,6 +50,7 @@ impl FromStr for OracleConnectOptions {
 impl ConnectOptions for OracleConnectOptions {
     type Connection = OracleConnection;
 
+    /// 从已解析的 URL 创建配置。
     fn from_url(url: &Url) -> Result<Self, Error> {
         Ok(Self {
             database_url: url.to_string(),
@@ -53,6 +58,7 @@ impl ConnectOptions for OracleConnectOptions {
         })
     }
 
+    /// 建立连接。
     fn connect(&self) -> BoxFuture<'_, Result<OracleConnection, Error>> {
         Box::pin(async move {
             OracleConnection::establish(&self.database_url, self.log_settings.clone()).await

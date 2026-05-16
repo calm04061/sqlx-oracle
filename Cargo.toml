@@ -1,10 +1,12 @@
 [workspace]
 members = ["sqlx-oracle", "sqlx-oracle-unit"]
 resolver = "3"
+
 [workspace.dependencies]
 sqlx = "0.8.6"
 sqlx-core = "0.8.6"
 dotenvy = "0.15.7"
+# Oracle OCI 绑定，使用非阻塞 + tokio 模式
 sibyl = { version = "0.7.0", features = ["nonblocking", "tokio"] }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"] }
 futures-core = "0.3.32"

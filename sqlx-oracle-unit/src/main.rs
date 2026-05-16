@@ -1,3 +1,9 @@
+//! sqlx-oracle 集成测试。
+//!
+//! 通过连接真实 Oracle 数据库运行，覆盖各种数据类型和 SQL 操作。
+//! 默认连接字符串从 `DATABASE_URL` 环境变量读取。
+//! 要求已安装 Oracle Instant Client。
+
 use sqlx::Connection;
 use sqlx_oracle::OracleConnection;
 
@@ -53,6 +59,7 @@ async fn main() {
 
 use sqlx::Row;
 
+/// 测试基础标量查询和列名索引。
 async fn test_select_scalar(conn: &mut OracleConnection) {
     let row = sqlx::query("SELECT 1 AS n, 'hello' AS s FROM DUAL")
         .fetch_one(&mut *conn)
@@ -65,6 +72,7 @@ async fn test_select_scalar(conn: &mut OracleConnection) {
     println!("  n={n} s={s}");
 }
 
+/// 测试带参数（占位符）的查询。
 async fn test_select_params(conn: &mut OracleConnection) {
     let row = sqlx::query("SELECT ? + ? AS sum, ? AS msg FROM DUAL")
         .bind(3i64)
@@ -80,6 +88,7 @@ async fn test_select_params(conn: &mut OracleConnection) {
     println!("  sum={sum} msg={msg}");
 }
 
+/// 测试 i64 类型的编码和解码（正数、负数、最大值）。
 async fn test_i64(conn: &mut OracleConnection) {
     for (input, label) in [(42i64, "positive"), (-1, "negative"), (i64::MAX, "MAX")] {
         let row = sqlx::query("SELECT ? AS v FROM DUAL")
@@ -93,6 +102,7 @@ async fn test_i64(conn: &mut OracleConnection) {
     }
 }
 
+/// 测试 f64 类型的编码和解码。
 async fn test_f64(conn: &mut OracleConnection) {
     let row = sqlx::query("SELECT ? AS v FROM DUAL")
         .bind(2.5f64)
@@ -104,6 +114,7 @@ async fn test_f64(conn: &mut OracleConnection) {
     println!("  f64: {v}");
 }
 
+/// 测试 bool 类型的编码和解码。
 async fn test_bool(conn: &mut OracleConnection) {
     for input in [true, false] {
         let row = sqlx::query("SELECT ? AS v FROM DUAL")
@@ -117,6 +128,7 @@ async fn test_bool(conn: &mut OracleConnection) {
     }
 }
 
+/// 测试字符串类型的编码和解码。
 async fn test_string(conn: &mut OracleConnection) {
     let row = sqlx::query("SELECT ? AS v FROM DUAL")
         .bind("the quick brown fox")
@@ -136,6 +148,7 @@ async fn test_string(conn: &mut OracleConnection) {
     println!("  empty string: result={v:?}");
 }
 
+/// 测试 INSERT 后 SELECT 的完整 DML 流程。
 async fn test_insert_select(conn: &mut OracleConnection) {
     sqlx::query("CREATE TABLE sqlx_test_insel (id NUMBER, label VARCHAR2(100))")
         .execute(&mut *conn)
@@ -168,6 +181,7 @@ async fn test_insert_select(conn: &mut OracleConnection) {
     println!("  cleaned up");
 }
 
+/// 测试 UPDATE 语句及 rows_affected()。
 async fn test_update(conn: &mut OracleConnection) {
     sqlx::query("CREATE TABLE sqlx_test_upd (id NUMBER, val NUMBER)")
         .execute(&mut *conn)
@@ -197,6 +211,7 @@ async fn test_update(conn: &mut OracleConnection) {
         .unwrap();
 }
 
+/// 测试事务回滚：插入后回滚，验证行不存在。
 async fn test_transaction_rollback(conn: &mut OracleConnection) {
     sqlx::query("CREATE TABLE sqlx_test_txn (id NUMBER)")
         .execute(&mut *conn)
@@ -227,6 +242,7 @@ async fn test_transaction_rollback(conn: &mut OracleConnection) {
         .unwrap();
 }
 
+/// 测试二进制数据（Vec<u8>）的十六进制编解码。
 async fn test_bytes(conn: &mut OracleConnection) {
     let payload = vec![0xde, 0xad, 0xbe, 0xefu8];
     let row = sqlx::query("SELECT ? AS v FROM DUAL")
@@ -239,6 +255,7 @@ async fn test_bytes(conn: &mut OracleConnection) {
     println!("  bytes: {v:x?}");
 }
 
+/// 测试 chrono 时间类型的编解码。
 async fn test_chrono(conn: &mut OracleConnection) {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
@@ -283,6 +300,7 @@ async fn test_chrono(conn: &mut OracleConnection) {
     println!("  DateTime<Utc>: {v}");
 }
 
+/// 测试 NULL 绑定。
 async fn test_null_binding(conn: &mut OracleConnection) {
     let row = sqlx::query("SELECT ? AS v FROM DUAL")
         .bind(None::<String>)

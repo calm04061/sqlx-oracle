@@ -1,6 +1,9 @@
 use std::fmt::{Debug, Display, Formatter};
 use sqlx_core::type_info::TypeInfo;
 
+/// Oracle 数据类型枚举。
+///
+/// 覆盖常用 Oracle 数据类型，映射自 sibyl 的 `ColumnType`。
 #[derive(Debug, Clone, PartialEq)]
 pub enum OracleTypeInfo {
     Char,
@@ -29,6 +32,7 @@ pub enum OracleTypeInfo {
 }
 
 impl OracleTypeInfo {
+    /// 返回 Oracle 类型名称（用于 Display 和调试输出）。
     pub fn name(&self) -> &str {
         match self {
             OracleTypeInfo::Char => "CHAR",
