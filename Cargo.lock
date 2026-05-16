@@ -1229,7 +1229,6 @@ dependencies = [
  "futures-util",
  "log",
  "once_cell",
- "parking_lot",
  "sibyl",
  "sqlx",
  "sqlx-core",

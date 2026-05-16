@@ -16,7 +16,6 @@ tokio = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 once_cell = { workspace = true }
-parking_lot = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
 log = { workspace = true }
