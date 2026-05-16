@@ -91,6 +91,19 @@ impl OracleConnection {
                 Error::from(OracleDbError::new(format!("failed to connect: {e}")))
             })?;
 
+        {
+            let nls_stmt = session.prepare(
+                "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS' \
+                 NLS_TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF6' \
+                 NLS_TIMESTAMP_TZ_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF6 TZR'"
+            ).await.map_err(|e| {
+                Error::from(OracleDbError::new(format!("failed to prepare NLS: {e}")))
+            })?;
+            nls_stmt.execute(()).await.map_err(|e| {
+                Error::from(OracleDbError::new(format!("failed to set NLS: {e}")))
+            })?;
+        }
+
         Ok(Self {
             session,
             transaction_depth: 0,

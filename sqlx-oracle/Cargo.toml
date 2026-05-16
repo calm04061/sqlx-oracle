@@ -18,6 +18,7 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 log = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
 
 [lib]
 name = "sqlx_oracle"
