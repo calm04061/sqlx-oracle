@@ -1,5 +1,3 @@
-# opencode AI 辅助工作流
-# 当 issue / PR 评论中出现 /oc 或 /opencode 时自动触发
 name: opencode
 
 on:
@@ -12,7 +10,6 @@ on:
 
 jobs:
   opencode:
-    # 仅在包含触发指令时运行
     if: |
       contains(github.event.comment.body, ' /oc') ||
       startsWith(github.event.comment.body, '/oc') ||
@@ -33,9 +30,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install opencode v1.15.1
+      - name: Install opencode v1.14.31
         shell: bash
-        run: curl -fsSL https://opencode.ai/install | bash -s -- --version v1.15.1
+        run: curl -fsSL https://opencode.ai/install | bash -s -- --version v1.14.31
 
       - name: Add opencode to PATH
         shell: bash
@@ -45,7 +42,6 @@ jobs:
         shell: bash
         run: opencode github run
         env:
-          # 使用 big-pickle 模型
           MODEL: opencode/big-pickle
           USE_GITHUB_TOKEN: true
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
