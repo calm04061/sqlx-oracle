@@ -62,7 +62,10 @@ impl<'q> Arguments<'q> for OracleArguments {
     where
         T: 'q + Encode<'q, Self::Database> + Type<Self::Database>,
     {
-        let _ = Encode::encode(value, &mut self.buffer)?;
+        let is_null = Encode::encode(value, &mut self.buffer)?;
+        if matches!(is_null, sqlx_core::encode::IsNull::Yes) {
+            self.buffer.push(crate::arguments::OracleBindValue::Null);
+        }
         Ok(())
     }
 

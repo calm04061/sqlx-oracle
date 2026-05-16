@@ -74,6 +74,41 @@ impl TypeInfo for OracleTypeInfo {
     fn is_void(&self) -> bool {
         false
     }
+
+    /// 检查两个 Oracle 类型是否兼容。
+    ///
+    /// 字符类型（CHAR/NCHAR/VARCHAR2/NVARCHAR2/CLOB/NCLOB）间互兼容；
+    /// 数字类型（NUMBER/BINARY_FLOAT/BINARY_DOUBLE）间互兼容；
+    /// 时间类型（DATE/TIMESTAMP/TIMESTAMP WITH TIME ZONE/LOCAL TZ）间互兼容。
+    fn type_compatible(&self, other: &Self) -> bool {
+        use OracleTypeInfo::*;
+
+        if self == other {
+            return true;
+        }
+
+        /// 是否为字符/布尔类类型。
+        fn is_string(t: &OracleTypeInfo) -> bool {
+            matches!(t, Char | NChar | Varchar2 | NVarchar2 | Clob | NClob | Long | Boolean)
+        }
+        /// 是否为数字类类型。
+        fn is_number(t: &OracleTypeInfo) -> bool {
+            matches!(t, Number | BinaryFloat | BinaryDouble)
+        }
+        /// 是否为时间类类型。
+        fn is_datetime(t: &OracleTypeInfo) -> bool {
+            matches!(t, Date | Timestamp | TimestampTZ | TimestampLTZ)
+        }
+        /// 是否为 RAW/BLOB 二进制类型。
+        fn is_binary(t: &OracleTypeInfo) -> bool {
+            matches!(t, Raw | LongRaw | Blob)
+        }
+
+        is_string(self) && is_string(other)
+            || is_number(self) && is_number(other)
+            || is_datetime(self) && is_datetime(other)
+            || is_binary(self) && is_binary(other)
+    }
 }
 
 impl Display for OracleTypeInfo {

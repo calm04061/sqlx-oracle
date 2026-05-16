@@ -9,8 +9,8 @@ use sqlx_core::executor::Executor;
 
 /// Oracle 事务管理器。
 ///
-/// 通过 ANSI 标准 SQL (`BEGIN` / `COMMIT` / `ROLLBACK`) 管理事务，
-/// 利用 `transaction_depth` 支持嵌套事务（保存点）。
+/// Oracle 使用隐式事务：第一个 DML 自动开启事务。
+/// 对于嵌套事务（savepoint）使用 `SAVEPOINT` / `RELEASE SAVEPOINT` / `ROLLBACK TO SAVEPOINT`。
 pub struct OracleTransactionManager;
 
 impl TransactionManager for OracleTransactionManager {
@@ -22,12 +22,15 @@ impl TransactionManager for OracleTransactionManager {
     ) -> BoxFuture<'conn, Result<(), Error>> {
         Box::pin(async move {
             let depth = conn.transaction_depth;
-            let sql = match statement {
-                Some(_) if depth > 0 => return Err(Error::InvalidSavePointStatement),
-                Some(stmt) => stmt,
-                None => sqlx_core::transaction::begin_ansi_transaction_sql(depth),
-            };
-            conn.execute(&*sql).await?;
+            if depth > 0 {
+                // 嵌套事务：使用 SAVEPOINT
+                let savepoint = format!("SAVEPOINT _sqlx_savepoint_{depth}");
+                conn.execute(&*savepoint).await?;
+            } else if let Some(stmt) = statement {
+                // 用户自定义语句（极少使用）
+                conn.execute(&*stmt).await?;
+            }
+            // depth == 0 且无自定义语句：Oracle 隐式事务，无需 SQL
             conn.transaction_depth += 1;
             Ok(())
         })
@@ -35,11 +38,16 @@ impl TransactionManager for OracleTransactionManager {
 
     fn commit(conn: &mut OracleConnection) -> BoxFuture<'_, Result<(), Error>> {
         Box::pin(async move {
-            if conn.transaction_depth > 0 {
-                conn.execute(
-                    &*sqlx_core::transaction::commit_ansi_transaction_sql(conn.transaction_depth),
-                )
-                .await?;
+            let depth = conn.transaction_depth;
+            if depth > 0 {
+                if depth == 1 {
+                    // 最外层事务：COMMIT
+                    conn.execute("COMMIT").await?;
+                } else {
+                    // 释放保存点
+                    let savepoint = format!("RELEASE SAVEPOINT _sqlx_savepoint_{}", depth - 1);
+                    conn.execute(&*savepoint).await?;
+                }
                 conn.transaction_depth -= 1;
             }
             Ok(())
@@ -48,11 +56,16 @@ impl TransactionManager for OracleTransactionManager {
 
     fn rollback(conn: &mut OracleConnection) -> BoxFuture<'_, Result<(), Error>> {
         Box::pin(async move {
-            if conn.transaction_depth > 0 {
-                conn.execute(
-                    &*sqlx_core::transaction::rollback_ansi_transaction_sql(conn.transaction_depth),
-                )
-                .await?;
+            let depth = conn.transaction_depth;
+            if depth > 0 {
+                if depth == 1 {
+                    // 最外层事务：ROLLBACK
+                    conn.execute("ROLLBACK").await?;
+                } else {
+                    // 回滚到保存点
+                    let savepoint = format!("ROLLBACK TO SAVEPOINT _sqlx_savepoint_{}", depth - 1);
+                    conn.execute(&*savepoint).await?;
+                }
                 conn.transaction_depth -= 1;
             }
             Ok(())

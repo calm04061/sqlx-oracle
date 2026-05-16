@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::{self, Debug};
+use std::path::PathBuf;
 
 use futures_core::future::BoxFuture;
 use futures_core::stream::BoxStream;
@@ -53,12 +54,29 @@ impl Debug for OracleConnection {
 impl OracleConnection {
     /// 建立到 Oracle 数据库的连接。
     ///
-    /// URL 格式：`oracle://user:password@host:port/service_name`
+    /// # URL 格式
     ///
-    /// 连接建立后自动设置 NLS 会话参数以确保日期/时间格式与 chrono 解析一致。
+    /// ## 直连 (ezconnect)
+    /// ```text
+    /// oracle://user:password@host:port/service_name
+    /// ```
+    ///
+    /// ## TNS 别名（需要 tnsnames.ora）
+    /// ```text
+    /// oracle://user:password@tns_alias
+    /// ```
+    ///
+    /// ## ATP/TCPS（需要 Oracle wallet 目录）
+    /// ```text
+    /// oracle://user:password@tns_alias?wallet=/path/to/wallet_dir
+    /// ```
+    ///
+    /// 连接建立后自动设置 NLS 会话参数。
+    #[allow(unsafe_code)]
     pub(crate) async fn establish(
         url: &str,
         log_settings: LogSettings,
+        wallet_path: Option<PathBuf>,
     ) -> Result<Self, Error> {
         // 解析连接 URL
         let parsed = Url::parse(url).map_err(|e| {
@@ -84,14 +102,35 @@ impl OracleConnection {
 
         let host = parsed.host_str().unwrap_or("localhost");
         let port = parsed.port().unwrap_or(1521);
-
         let service = parsed.path().trim_start_matches('/');
 
-        let dbname = if !service.is_empty() {
+        // 判断是否是 TNS 别名：
+        // 如果 host 中没有 '.' 且没有 service 路径，视为 TNS 别名（如 "manager"）
+        let is_tns_alias = !host.contains('.') && service.is_empty();
+
+        let dbname = if is_tns_alias {
+            // TNS 别名：直接使用 host 部分（如 "manager"），
+            // OCI 通过 $TNS_ADMIN/tnsnames.ora 解析
+            host.to_owned()
+        } else if !service.is_empty() {
+            // ezconnect 格式：host:port/service_name
             format!("{host}:{port}/{service}")
         } else {
+            // 仅 host:port
             format!("{host}:{port}")
         };
+
+        // 设置 TNS_ADMIN 环境变量（用于 ATP/TCPS 钱包连接）
+        // 仅在未设置时写入，避免覆盖外部设置
+        if let Some(ref wallet) = wallet_path {
+            if std::env::var("TNS_ADMIN").is_err() {
+                let canonical = std::fs::canonicalize(wallet)
+                    .map_err(|e| Error::protocol(format!("invalid wallet path: {e}")))?;
+                // SAFETY: TNS_ADMIN 在 OCI 连接初始化前写入，
+                // 之后不再修改，不会造成数据竞争。
+                unsafe { std::env::set_var("TNS_ADMIN", &canonical); }
+            }
+        }
 
         // 初始化全局 OCI 环境（仅首次调用时创建）
         let env = OCI_ENV
@@ -142,9 +181,9 @@ impl OracleConnection {
         first == "SELECT" || first == "WITH"
     }
 
-    /// 将 SQL 中的 `?` 占位符转换为 Oracle 的 `:n` 命名参数格式。
+    /// 将 SQL 中的 `?` 或 `$N` 占位符转换为 Oracle 的 `:n` 命名参数格式。
     ///
-    /// 跳过字符串字面量（单引号包裹）内的 `?`，保持其原样。
+    /// 跳过字符串字面量（单引号包裹）内的占位符。
     fn convert_placeholders(sql: &str, num_params: usize) -> String {
         if num_params == 0 {
             return sql.to_owned();
@@ -167,10 +206,37 @@ impl OracleConnection {
                         }
                     }
                 }
+                // 处理 ? 占位符
                 '?' if param_index <= num_params => {
                     use std::fmt::Write;
                     write!(result, ":{}", param_index).unwrap();
                     param_index += 1;
+                }
+                // 处理 $N 占位符（PostgreSQL 兼容）
+                '$' if param_index <= num_params => {
+                    // 跳过后续的数字
+                    let mut num_str = String::new();
+                    while let Some(&next) = chars.peek() {
+                        if next.is_ascii_digit() {
+                            num_str.push(next);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    if let Ok(n) = num_str.parse::<usize>() {
+                        use std::fmt::Write;
+                        write!(result, ":{}", n).unwrap();
+                        // 更新 param_index 追踪最大序号
+                        if n > param_index {
+                            param_index = n;
+                        }
+                        param_index += 1;
+                    } else {
+                        // 不是有效数字，原样保留
+                        result.push('$');
+                        result.push_str(&num_str);
+                    }
                 }
                 other => {
                     result.push(other);
@@ -211,7 +277,10 @@ impl OracleConnection {
         })?;
 
         if is_query {
-            // 查询路径：获取列元数据，读取所有行到内存后返回
+            // 查询路径：先执行查询，再获取列元数据
+            // （ATP 上 prepare 后 column_count() 不可用，必须在 query() 之后调用）
+            let rows = run_query(&stmt, &mut owned_args).await?;
+
             let num_cols = stmt.column_count().map_err(|e| {
                 Error::from(OracleDbError::new(format!("get column count failed: {e}")))
             })?;
@@ -235,8 +304,6 @@ impl OracleConnection {
                 });
             }
 
-            let rows = run_query(&stmt, &mut owned_args).await?;
-
             // 将所有行读入内存（当前实现未使用流式游标）
             let mut collected: Vec<Either<OracleQueryResult, OracleRow>> = Vec::new();
             loop {
@@ -252,13 +319,78 @@ impl OracleConnection {
                                     type_info: col.type_info.clone(),
                                 });
                             } else {
-                                let text: String = sibyl_row.get(i).map_err(|e| {
-                                    Error::Decode(
-                                        format!("failed to get column {i}: {e}").into(),
-                                    )
-                                })?;
+                                let raw_bytes = match col.type_info {
+                                    OracleTypeInfo::Raw | OracleTypeInfo::LongRaw | OracleTypeInfo::Blob => {
+                                        let bytes: &[u8] = sibyl_row.get(i).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to get binary column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        bytes.to_vec()
+                                    }
+                                    OracleTypeInfo::Date => {
+                                        let d: sibyl::Date = sibyl_row.get(i).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to get date column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        let text = d.to_string("YYYY-MM-DD HH24:MI:SS").map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to format date column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        text.into_bytes()
+                                    }
+                                    OracleTypeInfo::Timestamp => {
+                                        let ts: sibyl::Timestamp = sibyl_row.get(i).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to get timestamp column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        let text = ts.to_string("YYYY-MM-DD HH24:MI:SS.FF", 6).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to format timestamp column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        text.into_bytes()
+                                    }
+                                    OracleTypeInfo::TimestampTZ => {
+                                        let ts: sibyl::TimestampTZ = sibyl_row.get(i).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to get timestamptz column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        let text = ts.to_string("YYYY-MM-DD HH24:MI:SS.FF TZH:TZM", 6).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to format timestamptz column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        text.into_bytes()
+                                    }
+                                    OracleTypeInfo::TimestampLTZ => {
+                                        let ts: sibyl::TimestampLTZ = sibyl_row.get(i).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to get timestampltz column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        let text = ts.to_string("YYYY-MM-DD HH24:MI:SS.FF TZH:TZM", 6).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to format timestampltz column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        text.into_bytes()
+                                    }
+                                    _ => {
+                                        let text: String = sibyl_row.get(i).map_err(|e| {
+                                            Error::Decode(
+                                                format!("failed to get column {i}: {e}").into(),
+                                            )
+                                        })?;
+                                        text.into_bytes()
+                                    }
+                                };
                                 values.push(OracleValue {
-                                    value: Some(text.into_bytes()),
+                                    value: Some(raw_bytes),
                                     type_info: col.type_info.clone(),
                                 });
                             }
@@ -291,6 +423,11 @@ impl OracleConnection {
             // DML 路径：执行并返回影响行数
             let affected = run_execute(&stmt, &mut owned_args).await?;
 
+            // 自动提交：不在显式事务中时，每个 DML 后自动 COMMIT
+            if self.transaction_depth == 0 {
+                run_execute_commit(&self.session).await?;
+            }
+
             let result = OracleQueryResult {
                 rows_affected: affected as u64,
             };
@@ -317,7 +454,16 @@ impl Connection for OracleConnection {
     }
 
     fn ping(&mut self) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move { Ok(()) })
+        let sql = "SELECT 1 FROM DUAL";
+        Box::pin(async move {
+            let stmt = self.session.prepare(sql).await.map_err(|e| {
+                Error::from(OracleDbError::new(format!("ping prepare failed: {e}")))
+            })?;
+            stmt.query(()).await.map_err(|e| {
+                Error::from(OracleDbError::new(format!("ping query failed: {e}")))
+            })?;
+            Ok(())
+        })
     }
 
     fn begin(&mut self) -> BoxFuture<'_, Result<Transaction<'_, Self::Database>, Error>>
@@ -560,7 +706,7 @@ fn build_sibyl_args(args: &mut OracleArguments) -> Vec<Box<dyn sibyl::ToSql>> {
             OracleBindValue::Int(i) => Box::new(*i) as Box<dyn sibyl::ToSql>,
             OracleBindValue::Float(f) => Box::new(*f) as Box<dyn sibyl::ToSql>,
             OracleBindValue::String(s) => Box::new(s.clone()) as Box<dyn sibyl::ToSql>,
-            OracleBindValue::Bool(b) => Box::new(*b) as Box<dyn sibyl::ToSql>,
+            OracleBindValue::Bool(b) => Box::new(if *b { 1i32 } else { 0i32 }) as Box<dyn sibyl::ToSql>,
         })
         .collect()
 }
@@ -626,6 +772,27 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_placeholders_dollar_n() {
+        let sql = "DELETE FROM t WHERE id < $1";
+        let expected = "DELETE FROM t WHERE id < :1";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 1), expected);
+    }
+
+    #[test]
+    fn test_convert_placeholders_dollar_n_multiple() {
+        let sql = "SELECT $1, $2, $3 FROM t WHERE x = $4";
+        let expected = "SELECT :1, :2, :3 FROM t WHERE x = :4";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 4), expected);
+    }
+
+    #[test]
+    fn test_convert_placeholders_dollar_n_skip_string() {
+        let sql = "SELECT '$1' FROM t WHERE id = $1";
+        let expected = "SELECT '$1' FROM t WHERE id = :1";
+        assert_eq!(OracleConnection::convert_placeholders(sql, 1), expected);
+    }
+
+    #[test]
     fn test_build_sibyl_args_empty() {
         let mut args = OracleArguments::default();
         let result = build_sibyl_args(&mut args);
@@ -688,4 +855,15 @@ async fn run_execute<'a>(
     };
     stmt.execute(&mut refs).await
         .map_err(|e| Error::from(OracleDbError::new(format!("execute failed: {e}"))))
+}
+
+/// 执行 COMMIT（用于自动提交模式）。
+#[allow(unsafe_code)]
+async fn run_execute_commit(session: &sibyl::Session<'static>) -> Result<(), Error> {
+    let commit_stmt = session.prepare("COMMIT").await.map_err(|e| {
+        Error::from(OracleDbError::new(format!("prepare COMMIT failed: {e}")))
+    })?;
+    let mut empty_args: Vec<Box<dyn sibyl::ToSql>> = Vec::new();
+    run_execute(&commit_stmt, &mut empty_args).await?;
+    Ok(())
 }

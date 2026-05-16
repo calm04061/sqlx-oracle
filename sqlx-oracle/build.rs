@@ -73,8 +73,36 @@ fn main() {
     // 通知链接器搜索路径
     println!("cargo:rustc-link-search={}", lib_dir.display());
 
-    // macOS 需要设置 rpath 才能在运行时找到 dylib
+    // macOS 处理 dylib 的 install name 和代码签名
     if target_os == "macos" {
+        let libclntsh = lib_dir.join("libclntsh.dylib.23.1");
+        if libclntsh.exists() {
+            let lp = libclntsh.to_string_lossy();
+            let nnz = lib_dir.join("libnnz.dylib");
+            let nnz_s = nnz.to_string_lossy();
+            let core = lib_dir.join("libclntshcore.dylib.23.1");
+            let core_s = core.to_string_lossy();
+
+            // 将 libclntsh 自身 install name 改为绝对路径，下游二进制可直接加载
+            run("install_name_tool", &["-id", &lp, &lp]);
+            // libclntsh 内部引用 @rpath/libnnz.dylib 和 @rpath/libclntshcore.dylib.23.1，
+            // 改为绝对路径以便无需 rpath 即可加载
+            run("install_name_tool", &["-change", "@rpath/libnnz.dylib", &nnz_s, &lp]);
+            run("install_name_tool", &["-change", "@rpath/libclntshcore.dylib.23.1", &core_s, &lp]);
+            if nnz.exists() {
+                run("install_name_tool", &["-id", &nnz_s, &nnz_s]);
+            }
+            if core.exists() {
+                run("install_name_tool", &["-id", &core_s, &core_s]);
+            }
+
+            // ad-hoc 签名：macOS AMFI 在直接执行时要求所有加载的 dylib 有合法签名
+            //（lldb 调试时可绕过此检查，但正常启动会被 SIGKILL 终止）
+            run("codesign", &["-f", "-s", "-", &lp]);
+            run("codesign", &["-f", "-s", "-", &nnz_s]);
+            run("codesign", &["-f", "-s", "-", &core_s]);
+        }
+        // rpath 仅对本 crate 自身有效（不会传播到下游二进制），作为备选保留
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
     }
 

@@ -43,6 +43,48 @@ impl<'q> Encode<'q, Oracle> for i32 {
     }
 }
 
+impl<'q> Encode<'q, Oracle> for i16 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for i8 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for u64 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for u32 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for u16 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for u8 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
 impl<'q> Encode<'q, Oracle> for f64 {
     fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
         buf.push(OracleBindValue::Float(*self));
@@ -84,6 +126,48 @@ impl<'r> Decode<'r, Oracle> for i32 {
     fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
         let s = decode_text(value)?;
         s.parse().map_err(|e| format!("failed to parse i32: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for i16 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse i16: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for i8 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse i8: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for u64 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse u64: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for u32 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse u32: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for u16 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse u16: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for u8 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse u8: {e}").into())
     }
 }
 
@@ -133,6 +217,42 @@ impl Type<Oracle> for i32 {
     }
 }
 
+impl Type<Oracle> for i16 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
+impl Type<Oracle> for i8 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
+impl Type<Oracle> for u64 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
+impl Type<Oracle> for u32 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
+impl Type<Oracle> for u16 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
+impl Type<Oracle> for u8 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
 impl Type<Oracle> for f64 {
     fn type_info() -> OracleTypeInfo {
         OracleTypeInfo::Number
@@ -141,14 +261,15 @@ impl Type<Oracle> for f64 {
 
 impl Type<Oracle> for bool {
     fn type_info() -> OracleTypeInfo {
-        OracleTypeInfo::Boolean
+        // Oracle SQL 没有原生 BOOLEAN 类型，实际以 i32 (0/1) 编解码
+        OracleTypeInfo::Number
     }
 }
 
 sqlx_core::impl_encode_for_option!(Oracle);
 
 // ===========================================================================
-// Vec<u8> —— 以十六进制字符串编码（用于 RAW / BLOB 列）
+// Vec<u8> —— 以十六进制字符串编码输出，RAW 二进制字节直接读取
 // ===========================================================================
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -197,8 +318,15 @@ impl<'q> Encode<'q, Oracle> for Vec<u8> {
 
 impl<'r> Decode<'r, Oracle> for Vec<u8> {
     fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
-        let s = decode_text(value)?;
-        hex_decode(&s)
+        match value.type_info {
+            OracleTypeInfo::Raw | OracleTypeInfo::LongRaw | OracleTypeInfo::Blob => {
+                value.value.ok_or_else(|| "unexpected null".into()).map(|v| v.to_vec())
+            }
+            _ => {
+                let s = decode_text(value)?;
+                hex_decode(&s)
+            }
+        }
     }
 }
 
@@ -217,14 +345,26 @@ impl Type<Oracle> for Vec<u8> {
 // NaiveTime     → DATE（Oracle 总是返回完整时间戳，取时间部分）
 // DateTime<Utc> → TIMESTAMP WITH TIME ZONE
 
+fn fmt_subsec_micros(nanos: u32) -> String {
+    if nanos == 0 {
+        String::new()
+    } else {
+        format!(".{:06}", nanos / 1000)
+    }
+}
+
 impl<'q> Encode<'q, Oracle> for chrono::NaiveDateTime {
     fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%Y-%m-%d %H:%M:%S%.f").to_string()));
+        let nanos = self.and_utc().timestamp_subsec_nanos();
+        let s = format!("{}{}", self.format("%Y-%m-%d %H:%M:%S"), fmt_subsec_micros(nanos));
+        buf.push(OracleBindValue::String(s));
         Ok(IsNull::No)
     }
 
     fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%Y-%m-%d %H:%M:%S%.f").to_string()));
+        let nanos = self.and_utc().timestamp_subsec_nanos();
+        let s = format!("{}{}", self.format("%Y-%m-%d %H:%M:%S"), fmt_subsec_micros(nanos));
+        buf.push(OracleBindValue::String(s));
         Ok(IsNull::No)
     }
 }
@@ -275,12 +415,12 @@ impl Type<Oracle> for chrono::NaiveDate {
 
 impl<'q> Encode<'q, Oracle> for chrono::NaiveTime {
     fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%H:%M:%S%.f").to_string()));
+        buf.push(OracleBindValue::String(self.format("2000-01-01 %H:%M:%S").to_string()));
         Ok(IsNull::No)
     }
 
     fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%H:%M:%S%.f").to_string()));
+        buf.push(OracleBindValue::String(self.format("2000-01-01 %H:%M:%S").to_string()));
         Ok(IsNull::No)
     }
 }
