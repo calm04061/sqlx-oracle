@@ -30,9 +30,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install opencode v1.14.31
+      - name: Install opencode v1.15.1
         shell: bash
-        run: curl -fsSL https://opencode.ai/install | bash -s -- --version v1.14.31
+        run: curl -fsSL https://opencode.ai/install | bash -s -- --version v1.15.1
 
       - name: Add opencode to PATH
         shell: bash
