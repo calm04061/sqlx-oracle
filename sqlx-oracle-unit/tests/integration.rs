@@ -63,6 +63,21 @@ async fn i64_roundtrip() {
 }
 
 #[tokio::test]
+async fn i8_roundtrip() {
+    let mut conn = new_conn().await;
+    let params: [(i8, &str); 3] = [(42, "positive"), (-1, "negative"), (i8::MAX, "MAX")];
+    for (input, _label) in params {
+        let row = sqlx::query("SELECT CAST(? AS NUMBER) AS v FROM DUAL")
+            .bind(input)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        let v: i8 = row.get("V");
+        assert_eq!(v, input);
+    }
+}
+
+#[tokio::test]
 async fn f64_roundtrip() {
     let mut conn = new_conn().await;
     let row = sqlx::query("SELECT CAST(? AS BINARY_DOUBLE) AS v FROM DUAL")
@@ -112,7 +127,8 @@ async fn string_roundtrip() {
 async fn insert_select() {
     let mut conn = new_conn().await;
     let _ = sqlx::query("DROP TABLE sqlx_test_insel")
-        .execute(&mut conn).await;
+        .execute(&mut conn)
+        .await;
     sqlx::query("CREATE TABLE sqlx_test_insel (id NUMBER, label VARCHAR2(100)) NOPARALLEL")
         .execute(&mut conn)
         .await
@@ -145,7 +161,8 @@ async fn insert_select() {
 async fn update() {
     let mut conn = new_conn().await;
     let _ = sqlx::query("DROP TABLE sqlx_test_upd")
-        .execute(&mut conn).await;
+        .execute(&mut conn)
+        .await;
     sqlx::query("CREATE TABLE sqlx_test_upd (id NUMBER, val NUMBER) NOPARALLEL")
         .execute(&mut conn)
         .await
@@ -179,7 +196,8 @@ async fn update() {
 async fn transaction_rollback() {
     let mut conn = new_conn().await;
     let _ = sqlx::query("DROP TABLE sqlx_test_txn")
-        .execute(&mut conn).await;
+        .execute(&mut conn)
+        .await;
     sqlx::query("CREATE TABLE sqlx_test_txn (id NUMBER) NOPARALLEL")
         .execute(&mut conn)
         .await
@@ -225,7 +243,8 @@ async fn chrono_types() {
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
     let mut conn = new_conn().await;
 
-    let dt = NaiveDateTime::parse_from_str("2026-05-16 12:34:56.123456", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+    let dt = NaiveDateTime::parse_from_str("2026-05-16 12:34:56.123456", "%Y-%m-%d %H:%M:%S%.f")
+        .unwrap();
     let row = sqlx::query("SELECT CAST(? AS TIMESTAMP) AS v FROM DUAL")
         .bind(dt)
         .fetch_one(&mut conn)

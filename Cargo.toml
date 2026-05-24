@@ -3,8 +3,8 @@ members = ["sqlx-oracle", "sqlx-oracle-unit"]
 resolver = "3"
 
 [workspace.dependencies]
-sqlx = { version = "0.8.6",default-features = false }
-sqlx-core = "0.8.6"
+sqlx = { version = "0.9.0",default-features = false }
+sqlx-core = "0.9.0"
 dotenvy = "0.15.7"
 # Oracle OCI 绑定，使用非阻塞 + tokio 模式
 sibyl = { version = "0.7.0", features = ["nonblocking", "tokio"] }
