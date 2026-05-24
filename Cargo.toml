@@ -3,7 +3,7 @@ members = ["sqlx-oracle", "sqlx-oracle-unit"]
 resolver = "3"
 
 [workspace.dependencies]
-sqlx = "0.8.6"
+sqlx = { version = "0.8.6",default-features = false }
 sqlx-core = "0.8.6"
 dotenvy = "0.15.7"
 # Oracle OCI 绑定，使用非阻塞 + tokio 模式
