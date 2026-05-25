@@ -504,6 +504,10 @@ impl Connection for OracleConnection {
 impl<'c> Executor<'c> for &'c mut OracleConnection {
     type Database = Oracle;
 
+    /// 预编译并返回查询的描述信息（列元数据、参数信息等）。
+    ///
+    /// 由 sqlx 框架在需要 `Describe` 输出时隐式调用（如 `describe()` API）。
+    /// 需要 sqlx-core 的 `offline` feature 支持。
     #[doc(hidden)]
     fn describe<'e>(
         self,
