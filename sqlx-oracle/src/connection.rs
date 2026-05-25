@@ -504,6 +504,50 @@ impl Connection for OracleConnection {
 impl<'c> Executor<'c> for &'c mut OracleConnection {
     type Database = Oracle;
 
+    #[doc(hidden)]
+    fn describe<'e>(
+        self,
+        sql: SqlStr,
+    ) -> BoxFuture<'e, Result<sqlx_core::describe::Describe<Self::Database>, Error>>
+    where
+        'c: 'e,
+    {
+        Box::pin(async move {
+            let stmt = self.session.prepare(sql.as_str()).await.map_err(|e| {
+                Error::from(OracleDbError::new(format!("describe prepare failed: {e}")))
+            })?;
+
+            let num_cols = stmt.column_count().map_err(|e| {
+                Error::from(OracleDbError::new(format!("get column count failed: {e}")))
+            })?;
+
+            let mut columns = Vec::with_capacity(num_cols as usize);
+            for i in 0..num_cols {
+                let col_info = stmt.column(i).ok_or_else(|| {
+                    Error::protocol(format!("column {i} not found"))
+                })?;
+                let col_name = col_info.name().map_err(|e| {
+                    Error::from(OracleDbError::new(format!("get column name failed: {e}")))
+                })?;
+                let col_type = col_info.data_type().map_err(|e| {
+                    Error::from(OracleDbError::new(format!("get column type failed: {e}")))
+                })?;
+
+                columns.push(OracleColumn {
+                    ordinal: i,
+                    name: col_name.to_owned(),
+                    type_info: oracle_type_from_sibyl(col_type),
+                });
+            }
+
+            Ok(sqlx_core::describe::Describe {
+                columns,
+                parameters: None,
+                nullable: Vec::new(),
+            })
+        })
+    }
+
     /// 执行查询并返回混合流（DML 结果或行）。
     ///
     /// 从 `Execute` trait 对象提取 SQL 和参数，调用 `execute_or_query` 执行。
