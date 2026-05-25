@@ -1,9 +1,8 @@
-use std::borrow::Cow;
-
 use crate::OracleColumn;
 use crate::Oracle;
 use crate::OracleArguments;
 use crate::OracleTypeInfo;
+use sqlx_core::sql_str::SqlStr;
 use sqlx_core::statement::Statement;
 use sqlx_core::Either;
 
@@ -11,22 +10,19 @@ use sqlx_core::Either;
 ///
 /// 保存转换后的 Oracle SQL（`?` → `:n` 格式）以及查询结果列元数据。
 #[derive(Debug, Clone)]
-pub struct OracleStatement<'q> {
-    pub(crate) sql: Cow<'q, str>,
+pub struct OracleStatement {
+    pub(crate) sql: SqlStr,
     pub(crate) columns: Vec<OracleColumn>,
 }
 
-impl<'q> Statement<'q> for OracleStatement<'q> {
+impl Statement for OracleStatement {
     type Database = Oracle;
 
-    fn to_owned(&self) -> OracleStatement<'static> {
-        OracleStatement {
-            sql: Cow::Owned(self.sql.clone().into_owned()),
-            columns: self.columns.clone(),
-        }
+    fn into_sql(self) -> SqlStr {
+        self.sql
     }
 
-    fn sql(&self) -> &str {
+    fn sql(&self) -> &SqlStr {
         &self.sql
     }
 
@@ -41,8 +37,8 @@ impl<'q> Statement<'q> for OracleStatement<'q> {
     impl_statement_query!(OracleArguments);
 }
 
-impl sqlx_core::column::ColumnIndex<OracleStatement<'_>> for usize {
-    fn index(&self, statement: &OracleStatement<'_>) -> Result<usize, sqlx_core::error::Error> {
+impl sqlx_core::column::ColumnIndex<OracleStatement> for usize {
+    fn index(&self, statement: &OracleStatement) -> Result<usize, sqlx_core::error::Error> {
         let len = statement.columns.len();
         if *self >= len {
             return Err(sqlx_core::error::Error::ColumnIndexOutOfBounds { len, index: *self });
@@ -51,8 +47,8 @@ impl sqlx_core::column::ColumnIndex<OracleStatement<'_>> for usize {
     }
 }
 
-impl sqlx_core::column::ColumnIndex<OracleStatement<'_>> for &'_ str {
-    fn index(&self, statement: &OracleStatement<'_>) -> Result<usize, sqlx_core::error::Error> {
+impl sqlx_core::column::ColumnIndex<OracleStatement> for &'_ str {
+    fn index(&self, statement: &OracleStatement) -> Result<usize, sqlx_core::error::Error> {
         statement
             .columns
             .iter()

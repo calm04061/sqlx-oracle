@@ -30,10 +30,10 @@ impl Database for Oracle {
     type Value = OracleValue;
     type ValueRef<'r> = OracleValueRef<'r>;
 
-    type Arguments<'q> = OracleArguments;
-    type ArgumentBuffer<'q> = OracleArgumentBuffer;
+    type Arguments = OracleArguments;
+    type ArgumentBuffer = OracleArgumentBuffer;
 
-    type Statement<'q> = OracleStatement<'q>;
+    type Statement = OracleStatement;
 
     /// 数据库产品名称
     const NAME: &'static str = "Oracle";

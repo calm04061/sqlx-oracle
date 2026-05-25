@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::fmt::{self, Debug};
 use std::path::PathBuf;
 
@@ -13,8 +12,8 @@ use sqlx_core::error::Error;
 use sqlx_core::executor::{Execute, Executor};
 use sqlx_core::Either;
 use sqlx_core::arguments::Arguments;
-use sqlx_core::describe::Describe;
 use sqlx_core::logger::QueryLogger;
+use sqlx_core::sql_str::{AssertSqlSafe, SqlSafeStr, SqlStr};
 use sqlx_core::transaction::Transaction;
 
 use crate::arguments::OracleBindValue;
@@ -252,7 +251,7 @@ impl OracleConnection {
     /// 区分查询和 DML：查询返回行流，DML 返回受影响行数。
     async fn execute_or_query(
         &mut self,
-        sql: &str,
+        sql: SqlStr,
         arguments: Option<&mut OracleArguments>,
     ) -> Result<
         impl futures_core::Stream<
@@ -260,11 +259,11 @@ impl OracleConnection {
         > + use<'_>,
         Error,
     > {
-        let mut logger = QueryLogger::new(sql, self.log_settings.clone());
+        let mut logger = QueryLogger::new(sql.clone(), self.log_settings.clone());
 
         let num_params = arguments.as_ref().map(|a| a.len()).unwrap_or(0);
-        let oracle_sql = Self::convert_placeholders(sql, num_params);
-        let is_query = Self::sql_is_query(sql);
+        let oracle_sql = Self::convert_placeholders(sql.as_str(), num_params);
+        let is_query = Self::sql_is_query(sql.as_str());
 
         // 将 sqlx 统一参数转换为 sibyl 的 ToSql trait 对象
         let mut owned_args = arguments
@@ -445,28 +444,29 @@ impl Connection for OracleConnection {
     type Database = Oracle;
     type Options = OracleConnectOptions;
 
-    fn close(self) -> BoxFuture<'static, Result<(), Error>> {
-        Box::pin(async move { Ok(()) })
+    fn close(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
+        async move { Ok(()) }
     }
 
-    fn close_hard(self) -> BoxFuture<'static, Result<(), Error>> {
-        Box::pin(async move { Ok(()) })
+    fn close_hard(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
+        async move { Ok(()) }
     }
 
-    fn ping(&mut self) -> BoxFuture<'_, Result<(), Error>> {
-        let sql = "SELECT 1 FROM DUAL";
-        Box::pin(async move {
-            let stmt = self.session.prepare(sql).await.map_err(|e| {
+    fn ping(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
+        async move {
+            let stmt = self.session.prepare("SELECT 1 FROM DUAL").await.map_err(|e| {
                 Error::from(OracleDbError::new(format!("ping prepare failed: {e}")))
             })?;
             stmt.query(()).await.map_err(|e| {
                 Error::from(OracleDbError::new(format!("ping query failed: {e}")))
             })?;
             Ok(())
-        })
+        }
     }
 
-    fn begin(&mut self) -> BoxFuture<'_, Result<Transaction<'_, Self::Database>, Error>>
+    fn begin(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<Transaction<'_, Self::Database>, Error>> + Send + '_
     where
         Self: Sized,
     {
@@ -475,18 +475,18 @@ impl Connection for OracleConnection {
 
     fn begin_with(
         &mut self,
-        statement: impl Into<Cow<'static, str>>,
-    ) -> BoxFuture<'_, Result<Transaction<'_, Self::Database>, Error>>
+        statement: impl sqlx_core::sql_str::SqlSafeStr,
+    ) -> impl std::future::Future<Output = Result<Transaction<'_, Self::Database>, Error>> + Send + '_
     where
         Self: Sized,
     {
-        Transaction::begin(self, Some(statement.into()))
+        Transaction::begin(self, Some(statement.into_sql_str()))
     }
 
     fn shrink_buffers(&mut self) {}
 
-    fn flush(&mut self) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move { Ok(()) })
+    fn flush(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
+        async move { Ok(()) }
     }
 
     fn should_flush(&self) -> bool {
@@ -507,8 +507,8 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
         'q: 'e,
         E: 'q,
     {
-        let sql = query.sql();
         let arguments = query.take_arguments();
+        let sql = query.sql();
 
         Box::pin(
             async move {
@@ -542,8 +542,8 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
         'q: 'e,
         E: 'q,
     {
-        let sql = query.sql();
         let arguments = query.take_arguments();
+        let sql = query.sql();
 
         Box::pin(async move {
             let mut arguments = match arguments {
@@ -573,20 +573,20 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
         })
     }
 
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
         _parameters: &'e [OracleTypeInfo],
-    ) -> BoxFuture<'e, Result<OracleStatement<'q>, Error>>
+    ) -> BoxFuture<'e, Result<OracleStatement, Error>>
     where
         'c: 'e,
     {
         Box::pin(async move {
             let num_params = _parameters.len();
             let oracle_sql = if num_params > 0 {
-                OracleConnection::convert_placeholders(sql, num_params)
+                OracleConnection::convert_placeholders(sql.as_str(), num_params)
             } else {
-                sql.to_owned()
+                sql.as_str().to_owned()
             };
 
             let stmt = self.session.prepare(&oracle_sql).await.map_err(|e| {
@@ -617,51 +617,8 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
             }
 
             Ok(OracleStatement {
-                sql: Cow::Owned(oracle_sql),
+                sql: AssertSqlSafe(oracle_sql).into_sql_str(),
                 columns,
-            })
-        })
-    }
-
-    fn describe<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-    ) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>>
-    where
-        'c: 'e,
-    {
-        Box::pin(async move {
-            let stmt = self.session.prepare(sql).await.map_err(|e| {
-                Error::from(OracleDbError::new(format!("describe prepare failed: {e}")))
-            })?;
-
-            let num_cols = stmt.column_count().map_err(|e| {
-                Error::from(OracleDbError::new(format!("get column count failed: {e}")))
-            })?;
-
-            let mut columns = Vec::with_capacity(num_cols as usize);
-            for i in 0..num_cols {
-                let col_info = stmt.column(i).ok_or_else(|| {
-                    Error::protocol(format!("column {i} not found"))
-                })?;
-                let col_name = col_info.name().map_err(|e| {
-                    Error::from(OracleDbError::new(format!("get column name failed: {e}")))
-                })?;
-                let col_type = col_info.data_type().map_err(|e| {
-                    Error::from(OracleDbError::new(format!("get column type failed: {e}")))
-                })?;
-
-                columns.push(OracleColumn {
-                    ordinal: i,
-                    name: col_name.to_owned(),
-                    type_info: oracle_type_from_sibyl(col_type),
-                });
-            }
-
-            Ok(Describe {
-                columns,
-                nullable: vec![],
-                parameters: None,
             })
         })
     }

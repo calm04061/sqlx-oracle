@@ -92,6 +92,27 @@ impl<'q> Encode<'q, Oracle> for f64 {
     }
 }
 
+impl<'q> Encode<'q, Oracle> for f32 {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Float(*self as f64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for isize {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
+impl<'q> Encode<'q, Oracle> for usize {
+    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+        buf.push(OracleBindValue::Int(*self as i64));
+        Ok(IsNull::No)
+    }
+}
+
 impl<'q> Encode<'q, Oracle> for bool {
     fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
         buf.push(OracleBindValue::Bool(*self));
@@ -178,6 +199,28 @@ impl<'r> Decode<'r, Oracle> for f64 {
     }
 }
 
+impl<'r> Decode<'r, Oracle> for f32 {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        let v: f64 = s.parse::<f64>().map_err(|e| BoxDynError::from(format!("failed to parse f32: {e}")))?;
+        Ok(v as f32)
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for isize {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse isize: {e}").into())
+    }
+}
+
+impl<'r> Decode<'r, Oracle> for usize {
+    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+        let s = decode_text(value)?;
+        s.parse().map_err(|e| format!("failed to parse usize: {e}").into())
+    }
+}
+
 impl<'r> Decode<'r, Oracle> for bool {
     fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
         let s = decode_text(value)?;
@@ -259,6 +302,24 @@ impl Type<Oracle> for f64 {
     }
 }
 
+impl Type<Oracle> for f32 {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::BinaryFloat
+    }
+}
+
+impl Type<Oracle> for isize {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
+impl Type<Oracle> for usize {
+    fn type_info() -> OracleTypeInfo {
+        OracleTypeInfo::Number
+    }
+}
+
 impl Type<Oracle> for bool {
     fn type_info() -> OracleTypeInfo {
         // Oracle SQL 没有原生 BOOLEAN 类型，实际以 i32 (0/1) 编解码
@@ -283,6 +344,9 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, BoxDynError> {
     let compact: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.len() % 2 != 0 {
+        return Err("hex string has odd length".into());
+    }
     let mut out = Vec::with_capacity(compact.len() / 2);
     let mut i = 0;
     let bytes = compact.as_bytes();
@@ -458,10 +522,14 @@ impl<'q> Encode<'q, Oracle> for chrono::DateTime<chrono::Utc> {
 impl<'r> Decode<'r, Oracle> for chrono::DateTime<chrono::Utc> {
     fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
         let s = decode_text(value)?;
-        chrono::DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f %:z")
-            .or_else(|_| chrono::DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f"))
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .map_err(|e| format!("failed to parse DateTime<Utc>: {e}").into())
+        // 优先：有时区信息
+        if let Ok(dt) = chrono::DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f %:z") {
+            return Ok(dt.with_timezone(&chrono::Utc));
+        }
+        // 无时区：先解析为 NaiveDateTime，再假定为 UTC
+        let naive = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))?;
+        Ok(chrono::DateTime::from_naive_utc_and_offset(naive, chrono::Utc))
     }
 }
 
@@ -469,4 +537,767 @@ impl Type<Oracle> for chrono::DateTime<chrono::Utc> {
     fn type_info() -> OracleTypeInfo {
         OracleTypeInfo::TimestampTZ
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::OracleArguments;
+    use crate::OracleValueRef;
+    use sqlx_core::arguments::Arguments;
+
+    // -----------------------------------------------------------------------
+    // 辅助函数
+    // -----------------------------------------------------------------------
+
+    /// 编码一个值，返回产生的 `OracleBindValue`。
+    fn encode_value<T: for<'q> Encode<'q, Oracle>>(value: T) -> OracleBindValue {
+        let mut buf = OracleArgumentBuffer::default();
+        let _ = Encode::encode(value, &mut buf).unwrap();
+        buf.values.into_iter().next().unwrap()
+    }
+
+    /// 编码一个值的引用，返回产生的 `OracleBindValue`。
+    fn encode_ref<T: for<'q> Encode<'q, Oracle>>(value: &T) -> OracleBindValue {
+        let mut buf = OracleArgumentBuffer::default();
+        let _ = Encode::encode_by_ref(value, &mut buf).unwrap();
+        buf.values.into_iter().next().unwrap()
+    }
+
+    /// 将文本字节解码为指定类型。
+    fn decode_text_as<T>(text: &str, type_info: OracleTypeInfo) -> T
+    where
+        T: for<'r> Decode<'r, Oracle>,
+    {
+        let value_ref = OracleValueRef {
+            value: Some(text.as_bytes()),
+            type_info,
+        };
+        Decode::decode(value_ref).unwrap()
+    }
+
+    /// 将二进制字节解码为指定类型（用于 Vec<u8> 的 RAW 分支）。
+    fn decode_bytes_as<T>(bytes: &[u8], type_info: OracleTypeInfo) -> T
+    where
+        T: for<'r> Decode<'r, Oracle>,
+    {
+        let value_ref = OracleValueRef {
+            value: Some(bytes),
+            type_info,
+        };
+        Decode::decode(value_ref).unwrap()
+    }
+
+    /// 编码后再解码，验证 roundtrip 一致性。
+    fn roundtrip<T>(value: T, type_info: OracleTypeInfo)
+    where
+        T: for<'q> Encode<'q, Oracle> + for<'r> Decode<'r, Oracle> + PartialEq + std::fmt::Debug,
+    {
+        let mut buf = OracleArgumentBuffer::default();
+        let _ = Encode::encode_by_ref(&value, &mut buf).unwrap();
+        let bind_value = buf.values.into_iter().next().unwrap();
+
+        // 根据编码值重建文本并解码
+        let text = match &bind_value {
+            OracleBindValue::Null => panic!("unexpected Null in roundtrip"),
+            OracleBindValue::String(s) => s.clone(),
+            OracleBindValue::Int(i) => i.to_string(),
+            OracleBindValue::Float(f) => f.to_string(),
+            OracleBindValue::Bool(b) => (if *b { "1" } else { "0" }).to_string(),
+        };
+
+        let decoded: T = decode_text_as(&text, type_info);
+        assert_eq!(decoded, value, "roundtrip failed for type");
+    }
+
+    // -----------------------------------------------------------------------
+    // 字符串类型
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_string() {
+        let v = encode_value("hello".to_string());
+        assert!(matches!(&v, OracleBindValue::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn test_encode_str_ref() {
+        let v = encode_ref(&"hello");
+        assert!(matches!(&v, OracleBindValue::String(s) if s == "hello"));
+    }
+
+    #[test]
+    fn test_decode_string() {
+        let decoded: String = decode_text_as("hello", OracleTypeInfo::Varchar2);
+        assert_eq!(decoded, "hello");
+    }
+
+    #[test]
+    fn test_decode_string_empty() {
+        let decoded: String = decode_text_as("", OracleTypeInfo::Varchar2);
+        assert_eq!(decoded, "");
+    }
+
+    #[test]
+    fn test_string_roundtrip() {
+        roundtrip("你好, Oracle!".to_string(), OracleTypeInfo::Varchar2);
+        roundtrip(String::new(), OracleTypeInfo::Varchar2);
+    }
+
+    // -----------------------------------------------------------------------
+    // 有符号整数
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_i64() {
+        let v = encode_value(42i64);
+        assert!(matches!(&v, OracleBindValue::Int(42)));
+    }
+
+    #[test]
+    fn test_decode_i64() {
+        let decoded: i64 = decode_text_as("42", OracleTypeInfo::Number);
+        assert_eq!(decoded, 42);
+    }
+
+    #[test]
+    fn test_i64_roundtrip() {
+        roundtrip(0i64, OracleTypeInfo::Number);
+        roundtrip(1i64, OracleTypeInfo::Number);
+        roundtrip(-1i64, OracleTypeInfo::Number);
+        roundtrip(i64::MAX, OracleTypeInfo::Number);
+        roundtrip(i64::MIN, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_i32_roundtrip() {
+        roundtrip(0i32, OracleTypeInfo::Number);
+        roundtrip(42i32, OracleTypeInfo::Number);
+        roundtrip(-42i32, OracleTypeInfo::Number);
+        roundtrip(i32::MAX, OracleTypeInfo::Number);
+        roundtrip(i32::MIN, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_i16_roundtrip() {
+        roundtrip(0i16, OracleTypeInfo::Number);
+        roundtrip(32767i16, OracleTypeInfo::Number);
+        roundtrip(-32768i16, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_i8_roundtrip() {
+        roundtrip(0i8, OracleTypeInfo::Number);
+        roundtrip(127i8, OracleTypeInfo::Number);
+        roundtrip(-128i8, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_isize_roundtrip() {
+        roundtrip(0isize, OracleTypeInfo::Number);
+        roundtrip(42isize, OracleTypeInfo::Number);
+        roundtrip(-42isize, OracleTypeInfo::Number);
+    }
+
+    // -----------------------------------------------------------------------
+    // 无符号整数
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_u64() {
+        let v = encode_value(42u64);
+        assert!(matches!(&v, OracleBindValue::Int(42)));
+    }
+
+    #[test]
+    fn test_decode_u64() {
+        let decoded: u64 = decode_text_as("42", OracleTypeInfo::Number);
+        assert_eq!(decoded, 42);
+    }
+
+    #[test]
+    fn test_u64_roundtrip() {
+        roundtrip(0u64, OracleTypeInfo::Number);
+        roundtrip(1u64, OracleTypeInfo::Number);
+        roundtrip(i64::MAX as u64, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_u32_roundtrip() {
+        roundtrip(0u32, OracleTypeInfo::Number);
+        roundtrip(u32::MAX, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_u16_roundtrip() {
+        roundtrip(0u16, OracleTypeInfo::Number);
+        roundtrip(u16::MAX, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_u8_roundtrip() {
+        roundtrip(0u8, OracleTypeInfo::Number);
+        roundtrip(255u8, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_usize_roundtrip() {
+        roundtrip(0usize, OracleTypeInfo::Number);
+        roundtrip(42usize, OracleTypeInfo::Number);
+    }
+
+    // -----------------------------------------------------------------------
+    // 浮点数
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_f64() {
+        let v = encode_value(3.14f64);
+        assert!(matches!(&v, OracleBindValue::Float(f) if (*f - 3.14).abs() < 1e-10));
+    }
+
+    #[test]
+    fn test_decode_f64() {
+        let decoded: f64 = decode_text_as("3.14", OracleTypeInfo::Number);
+        assert!((decoded - 3.14).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_f64_roundtrip() {
+        roundtrip(0.0f64, OracleTypeInfo::Number);
+        roundtrip(-0.0f64, OracleTypeInfo::Number);
+        roundtrip(1.0f64, OracleTypeInfo::Number);
+        roundtrip(-1.0f64, OracleTypeInfo::Number);
+        roundtrip(3.141592653589793f64, OracleTypeInfo::Number);
+        roundtrip(f64::MIN, OracleTypeInfo::Number);
+        roundtrip(f64::MAX, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_f32_roundtrip() {
+        roundtrip(0.0f32, OracleTypeInfo::BinaryFloat);
+        roundtrip(1.0f32, OracleTypeInfo::BinaryFloat);
+        roundtrip(-1.0f32, OracleTypeInfo::BinaryFloat);
+        roundtrip(3.14f32, OracleTypeInfo::BinaryFloat);
+        roundtrip(f32::MIN, OracleTypeInfo::BinaryFloat);
+        roundtrip(f32::MAX, OracleTypeInfo::BinaryFloat);
+    }
+
+    #[test]
+    fn test_decode_f64_inf_nan() {
+        // Oracle 不直接支持 NaN/Infinity，但需要确保不会 panic
+        let decoded: f64 = decode_text_as("NaN", OracleTypeInfo::Number);
+        assert!(decoded.is_nan());
+
+        let decoded: f64 = decode_text_as("Infinity", OracleTypeInfo::Number);
+        assert!(decoded.is_infinite() && decoded.is_sign_positive());
+
+        let decoded: f64 = decode_text_as("-Infinity", OracleTypeInfo::Number);
+        assert!(decoded.is_infinite() && decoded.is_sign_negative());
+    }
+
+    // -----------------------------------------------------------------------
+    // 布尔值
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_bool_true() {
+        let v = encode_value(true);
+        assert!(matches!(&v, OracleBindValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_encode_bool_false() {
+        let v = encode_value(false);
+        assert!(matches!(&v, OracleBindValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_decode_bool() {
+        assert!(decode_text_as::<bool>("1", OracleTypeInfo::Number));
+        assert!(decode_text_as::<bool>("true", OracleTypeInfo::Number));
+        assert!(decode_text_as::<bool>("TRUE", OracleTypeInfo::Number));
+        assert!(!decode_text_as::<bool>("0", OracleTypeInfo::Number));
+        assert!(!decode_text_as::<bool>("false", OracleTypeInfo::Number));
+        assert!(!decode_text_as::<bool>("FALSE", OracleTypeInfo::Number));
+    }
+
+    #[test]
+    fn test_bool_roundtrip() {
+        roundtrip(true, OracleTypeInfo::Number);
+        roundtrip(false, OracleTypeInfo::Number);
+    }
+
+    // -----------------------------------------------------------------------
+    // 二进制
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_vec_u8() {
+        let v = encode_value(vec![0x00, 0xFF, 0xAB]);
+        assert!(matches!(&v, OracleBindValue::String(s) if s == "00FFAB"));
+    }
+
+    #[test]
+    fn test_decode_vec_u8_raw() {
+        let decoded: Vec<u8> = decode_bytes_as(&[0x00, 0xFF, 0xAB], OracleTypeInfo::Raw);
+        assert_eq!(decoded, vec![0x00, 0xFF, 0xAB]);
+    }
+
+    #[test]
+    fn test_decode_vec_u8_long_raw() {
+        let decoded: Vec<u8> = decode_bytes_as(&[0xDE, 0xAD], OracleTypeInfo::LongRaw);
+        assert_eq!(decoded, vec![0xDE, 0xAD]);
+    }
+
+    #[test]
+    fn test_decode_vec_u8_blob() {
+        let decoded: Vec<u8> = decode_bytes_as(b"hello", OracleTypeInfo::Blob);
+        assert_eq!(decoded, b"hello");
+    }
+
+    #[test]
+    fn test_decode_vec_u8_hex_text() {
+        // 对于非 RAW 类型，Vec<u8> 会 hex 解码文本
+        let decoded: Vec<u8> = decode_text_as("00FFAB", OracleTypeInfo::Varchar2);
+        assert_eq!(decoded, vec![0x00, 0xFF, 0xAB]);
+    }
+
+    #[test]
+    fn test_decode_vec_u8_hex_text_lowercase() {
+        let decoded: Vec<u8> = decode_text_as("00ffab", OracleTypeInfo::Varchar2);
+        assert_eq!(decoded, vec![0x00, 0xFF, 0xAB]);
+    }
+
+    #[test]
+    fn test_vec_u8_roundtrip_hex() {
+        // Vec<u8> 通过 hex 文本编解码（非 RAW 分支）
+        roundtrip(vec![], OracleTypeInfo::Varchar2);
+        roundtrip(vec![0x00, 0xFF], OracleTypeInfo::Varchar2);
+    }
+
+    #[test]
+    fn test_vec_u8_empty() {
+        let v = encode_value(Vec::<u8>::new());
+        assert!(matches!(&v, OracleBindValue::String(s) if s.is_empty()));
+    }
+
+    // -----------------------------------------------------------------------
+    // 日期时间
+    // -----------------------------------------------------------------------
+
+    use chrono::{NaiveDate, NaiveDateTime, NaiveTime, DateTime, Utc, TimeZone, Datelike, Timelike};
+
+    #[test]
+    fn test_encode_naive_datetime() {
+        let dt = NaiveDateTime::parse_from_str("2024-01-15 10:30:45", "%Y-%m-%d %H:%M:%S").unwrap();
+        let v = encode_value(dt);
+        assert!(matches!(&v, OracleBindValue::String(s) if s.starts_with("2024-01-15 10:30:45")));
+    }
+
+    #[test]
+    fn test_decode_naive_datetime() {
+        let decoded: NaiveDateTime =
+            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::Timestamp);
+        assert_eq!(decoded.year(), 2024);
+        assert_eq!(decoded.month(), 1);
+        assert_eq!(decoded.day(), 15);
+        assert_eq!(decoded.hour(), 10);
+        assert_eq!(decoded.minute(), 30);
+        assert_eq!(decoded.second(), 45);
+    }
+
+    #[test]
+    fn test_naive_datetime_roundtrip() {
+        let dt = NaiveDateTime::parse_from_str("2024-01-15 10:30:45", "%Y-%m-%d %H:%M:%S").unwrap();
+        roundtrip(dt, OracleTypeInfo::Timestamp);
+
+        let dt = NaiveDateTime::parse_from_str(
+            "2024-06-15 23:59:59.123456",
+            "%Y-%m-%d %H:%M:%S%.f",
+        )
+        .unwrap();
+        roundtrip(dt, OracleTypeInfo::Timestamp);
+    }
+
+    #[test]
+    fn test_naive_datetime_subsecond() {
+        let dt = NaiveDateTime::parse_from_str(
+            "2024-01-01 00:00:00.123456",
+            "%Y-%m-%d %H:%M:%S%.f",
+        )
+        .unwrap();
+        let v = encode_value(dt);
+        if let OracleBindValue::String(s) = v {
+            assert!(s.contains(".123456"), "expected subsecond precision, got {s}");
+        } else {
+            panic!("expected String bind value");
+        }
+    }
+
+    #[test]
+    fn test_decode_naive_date() {
+        let decoded: NaiveDate = decode_text_as("2024-01-15", OracleTypeInfo::Date);
+        assert_eq!(decoded, NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
+    }
+
+    #[test]
+    fn test_decode_naive_date_from_datetime() {
+        // Oracle DATE 列返回完整时间戳，需能从时间戳中提取日期
+        let decoded: NaiveDate =
+            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::Date);
+        assert_eq!(decoded, NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
+    }
+
+    #[test]
+    fn test_naive_date_roundtrip() {
+        roundtrip(
+            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
+            OracleTypeInfo::Date,
+        );
+        roundtrip(
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+            OracleTypeInfo::Date,
+        );
+        roundtrip(
+            NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
+            OracleTypeInfo::Date,
+        );
+    }
+
+    #[test]
+    fn test_decode_naive_time() {
+        let decoded: NaiveTime =
+            decode_text_as("10:30:45", OracleTypeInfo::Date);
+        assert_eq!(decoded, NaiveTime::from_hms_opt(10, 30, 45).unwrap());
+    }
+
+    #[test]
+    fn test_decode_naive_time_from_datetime() {
+        // Oracle DATE 列返回完整时间戳，需能提取时间部分
+        let decoded: NaiveTime =
+            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::Date);
+        assert_eq!(decoded, NaiveTime::from_hms_opt(10, 30, 45).unwrap());
+    }
+
+    #[test]
+    fn test_naive_time_roundtrip() {
+        roundtrip(
+            NaiveTime::from_hms_opt(10, 30, 45).unwrap(),
+            OracleTypeInfo::Date,
+        );
+        roundtrip(
+            NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
+            OracleTypeInfo::Date,
+        );
+    }
+
+    #[test]
+    fn test_encode_datetime_utc() {
+        let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 45).unwrap();
+        let v = encode_value(dt);
+        assert!(matches!(&v, OracleBindValue::String(s) if s.contains("2024-01-15 10:30:45")));
+    }
+
+    #[test]
+    fn test_decode_datetime_utc() {
+        let decoded: DateTime<Utc> =
+            decode_text_as("2024-01-15 10:30:45 +00:00", OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.year(), 2024);
+        assert_eq!(decoded.month(), 1);
+        assert_eq!(decoded.day(), 15);
+        assert_eq!(decoded.hour(), 10);
+        assert_eq!(decoded.minute(), 30);
+    }
+
+    #[test]
+    fn test_decode_datetime_utc_without_tz() {
+        // 无时区后缀时默认为 UTC
+        let decoded: DateTime<Utc> =
+            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 10);
+        assert_eq!(decoded.minute(), 30);
+    }
+
+    #[test]
+    fn test_datetime_utc_roundtrip() {
+        let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 45).unwrap();
+        roundtrip(dt, OracleTypeInfo::TimestampTZ);
+
+        let dt = Utc.with_ymd_and_hms(2024, 6, 15, 23, 59, 59).unwrap();
+        roundtrip(dt, OracleTypeInfo::TimestampTZ);
+    }
+
+    #[test]
+    fn test_datetime_utc_subsecond() {
+        let dt = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
+            + chrono::Duration::microseconds(123_456);
+        roundtrip(dt, OracleTypeInfo::TimestampTZ);
+    }
+
+    // -----------------------------------------------------------------------
+    // 空值
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_decode_null_returns_error() {
+        let value_ref = OracleValueRef {
+            value: None,
+            type_info: OracleTypeInfo::Varchar2,
+        };
+        let result: Result<String, BoxDynError> = Decode::decode(value_ref);
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Option 编码
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_option_some() {
+        let mut buf = OracleArgumentBuffer::default();
+        let _ = Encode::encode(Some(42i64), &mut buf).unwrap();
+        assert!(matches!(buf.values[0], OracleBindValue::Int(42)));
+    }
+
+    #[test]
+    fn test_encode_option_none() {
+        let mut buf = OracleArgumentBuffer::default();
+        let result = Encode::encode(None::<i64>, &mut buf);
+        assert!(matches!(result, Ok(IsNull::Yes)));
+    }
+
+    // -----------------------------------------------------------------------
+    // 编码结果验证
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_type_info_mappings() {
+        assert_eq!(<String as Type<Oracle>>::type_info(), OracleTypeInfo::Varchar2);
+        assert_eq!(<&str as Type<Oracle>>::type_info(), OracleTypeInfo::Varchar2);
+        assert_eq!(<i64 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<i32 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<i16 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<i8 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<u64 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<u32 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<u16 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<u8 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<f64 as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<f32 as Type<Oracle>>::type_info(), OracleTypeInfo::BinaryFloat);
+        assert_eq!(<isize as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<usize as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<bool as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
+        assert_eq!(<Vec<u8> as Type<Oracle>>::type_info(), OracleTypeInfo::Raw);
+        assert_eq!(<chrono::NaiveDateTime as Type<Oracle>>::type_info(), OracleTypeInfo::Timestamp);
+        assert_eq!(<chrono::NaiveDate as Type<Oracle>>::type_info(), OracleTypeInfo::Date);
+        assert_eq!(<chrono::NaiveTime as Type<Oracle>>::type_info(), OracleTypeInfo::Date);
+        assert_eq!(<chrono::DateTime<chrono::Utc> as Type<Oracle>>::type_info(), OracleTypeInfo::TimestampTZ);
+    }
+
+    // -----------------------------------------------------------------------
+    // 批量边界值测试
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_integer_boundaries() {
+        // 验证编码不 panic
+        let cases: Vec<i64> = vec![
+            i64::MIN,
+            i64::MIN + 1,
+            -1,
+            0,
+            1,
+            i64::MAX - 1,
+            i64::MAX,
+        ];
+        for v in cases {
+            let _ = encode_value(v);
+        }
+    }
+
+    #[test]
+    fn test_unsigned_boundaries() {
+        let cases: Vec<u64> = vec![0, 1, u64::MAX - 1, u64::MAX];
+        for v in cases {
+            let _ = encode_value(v);
+        }
+    }
+
+    #[test]
+    fn test_float_special_values() {
+        // 验证 NaN/Infinity 编码不会 panic
+        let _ = encode_value(f64::NAN);
+        let _ = encode_value(f64::INFINITY);
+        let _ = encode_value(f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn test_i64_decode_negative() {
+        let decoded: i64 = decode_text_as("-9223372036854775808", OracleTypeInfo::Number);
+        assert_eq!(decoded, i64::MIN);
+    }
+
+    // -----------------------------------------------------------------------
+    // hex 编解码
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_hex_encode_decode() {
+        assert_eq!(hex_encode(&[0x00, 0xFF, 0xAB]), "00FFAB");
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_hex_decode() {
+        assert_eq!(hex_decode("00FFAB").unwrap(), vec![0x00, 0xFF, 0xAB]);
+        assert_eq!(hex_decode("00ffab").unwrap(), vec![0x00, 0xFF, 0xAB]);
+        assert_eq!(hex_decode("").unwrap(), vec![]);
+        assert!(hex_decode("0").is_err(), "odd-length input should error");
+        assert!(hex_decode("XX").is_err());
+    }
+
+    #[test]
+    fn test_hex_decode_with_whitespace() {
+        assert_eq!(hex_decode("00 FF AB").unwrap(), vec![0x00, 0xFF, 0xAB]);
+        assert_eq!(hex_decode(" 00ff ").unwrap(), vec![0x00, 0xFF]);
+    }
+
+    #[test]
+    fn test_hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_hex_encode_full_range() {
+        let bytes: Vec<u8> = (0..=255).collect();
+        let encoded = hex_encode(&bytes);
+        assert_eq!(encoded.len(), 512);
+        assert!(encoded.starts_with("000102"));
+        assert!(encoded.ends_with("FDFEFF"));
+    }
+
+    #[test]
+    fn test_string_special_chars() {
+        let s = "\n\t\r\\'\0";
+        let v = encode_value(s.to_string());
+        assert!(matches!(&v, OracleBindValue::String(x) if x == s));
+    }
+
+    #[test]
+    fn test_float_negative() {
+        roundtrip(-3.14f64, OracleTypeInfo::Number);
+        roundtrip(-0.001f64, OracleTypeInfo::Number);
+        roundtrip(-1.0e-10f64, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_float_small() {
+        roundtrip(1e-100f64, OracleTypeInfo::Number);
+        roundtrip(1e100f64, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_f32_special_encode() {
+        let _ = encode_value(f32::INFINITY);
+        let _ = encode_value(f32::NEG_INFINITY);
+        let _ = encode_value(f32::NAN);
+    }
+
+    #[test]
+    fn test_bool_decode_variants() {
+        assert!(decode_text_as::<bool>("1", OracleTypeInfo::Number));
+        assert!(decode_text_as::<bool>("true", OracleTypeInfo::Number));
+        assert!(decode_text_as::<bool>("TRUE", OracleTypeInfo::Number));
+        assert!(!decode_text_as::<bool>("0", OracleTypeInfo::Number));
+        assert!(!decode_text_as::<bool>("false", OracleTypeInfo::Number));
+        assert!(!decode_text_as::<bool>("FALSE", OracleTypeInfo::Number));
+    }
+
+    #[test]
+    fn test_bool_decode_invalid_error() {
+        let value_ref = OracleValueRef {
+            value: Some(b"2"),
+            type_info: OracleTypeInfo::Number,
+        };
+        let result: Result<bool, BoxDynError> = Decode::decode(value_ref);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_i64_u64_boundary() {
+        let v = i64::MAX as u64;
+        roundtrip(v, OracleTypeInfo::Number);
+    }
+
+    #[test]
+    fn test_naive_datetime_subsecond_edge_cases() {
+        let dt1 = NaiveDateTime::parse_from_str("2024-01-01 00:00:00.000000", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+        let dt2 = NaiveDateTime::parse_from_str("2024-01-01 00:00:00.999999", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+        roundtrip(dt1, OracleTypeInfo::Timestamp);
+        roundtrip(dt2, OracleTypeInfo::Timestamp);
+    }
+
+    #[test]
+    fn test_naive_date_leap_year() {
+        roundtrip(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap(), OracleTypeInfo::Date);
+        roundtrip(NaiveDate::from_ymd_opt(2000, 2, 29).unwrap(), OracleTypeInfo::Date);
+        roundtrip(NaiveDate::from_ymd_opt(1900, 2, 28).unwrap(), OracleTypeInfo::Date);
+    }
+
+    #[test]
+    fn test_datetime_utc_positive_offset() {
+        let s = "2024-01-15 18:30:45 +08:00";
+        let decoded: DateTime<Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 10); // 18:30 +08:00 = 10:30 UTC
+        assert_eq!(decoded.minute(), 30);
+    }
+
+    #[test]
+    fn test_datetime_utc_negative_offset() {
+        let s = "2024-01-15 06:30:45 -05:00";
+        let decoded: DateTime<Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 11); // 06:30 -05:00 = 11:30 UTC
+        assert_eq!(decoded.minute(), 30);
+    }
+
+    #[test]
+    fn test_datetime_utc_with_fractional_tz() {
+        let s = "2024-01-15 10:15:45 +05:30";
+        let decoded: DateTime<Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 4);  // 10:15 +05:30 = 04:45 UTC
+        assert_eq!(decoded.minute(), 45);
+    }
+
+    #[test]
+    fn test_u64_overflow_encoding() {
+        let mut buf = OracleArgumentBuffer::default();
+        // u64::MAX as i64 wraps to -1
+        let val = u64::MAX;
+        let _ = Encode::encode_by_ref(&val, &mut buf).unwrap();
+        assert!(matches!(buf.values[0], OracleBindValue::Int(-1)));
+    }
+
+    #[test]
+    fn test_encode_multiple_values() {
+        let mut buf = OracleArgumentBuffer::default();
+        let _ = Encode::encode_by_ref(&1i64, &mut buf).unwrap();
+        let _ = Encode::encode_by_ref(&"hello", &mut buf).unwrap();
+        let _ = Encode::encode_by_ref(&3.14f64, &mut buf).unwrap();
+        let _ = Encode::encode_by_ref(&true, &mut buf).unwrap();
+        assert_eq!(buf.values.len(), 4);
+        assert!(matches!(buf.values[0], OracleBindValue::Int(1)));
+        assert!(matches!(&buf.values[1], OracleBindValue::String(s) if s == "hello"));
+        assert!(matches!(buf.values[2], OracleBindValue::Float(f) if (f - 3.14).abs() < 1e-10));
+        assert!(matches!(buf.values[3], OracleBindValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_format_placeholder() {
+        let args = OracleArguments::default();
+        let mut output = String::new();
+        args.format_placeholder(&mut output).unwrap();
+        assert_eq!(output, "$0");
+    }
+
 }

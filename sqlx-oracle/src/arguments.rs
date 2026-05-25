@@ -51,16 +51,16 @@ pub struct OracleArguments {
     pub(crate) buffer: OracleArgumentBuffer,
 }
 
-impl<'q> Arguments<'q> for OracleArguments {
+impl Arguments for OracleArguments {
     type Database = Oracle;
 
     fn reserve(&mut self, additional: usize, _size: usize) {
         self.buffer.values.reserve(additional);
     }
 
-    fn add<T>(&mut self, value: T) -> Result<(), BoxDynError>
+    fn add<'t, T>(&mut self, value: T) -> Result<(), BoxDynError>
     where
-        T: 'q + Encode<'q, Self::Database> + Type<Self::Database>,
+        T: Encode<'t, Self::Database> + Type<Self::Database>,
     {
         let is_null = Encode::encode(value, &mut self.buffer)?;
         if matches!(is_null, sqlx_core::encode::IsNull::Yes) {

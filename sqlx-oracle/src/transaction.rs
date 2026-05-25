@@ -1,6 +1,4 @@
-use std::borrow::Cow;
-
-use futures_core::future::BoxFuture;
+use sqlx_core::sql_str::{AssertSqlSafe, SqlSafeStr, SqlStr};
 use sqlx_core::transaction::TransactionManager;
 
 use crate::{OracleConnection, Oracle};
@@ -18,58 +16,51 @@ impl TransactionManager for OracleTransactionManager {
 
     fn begin<'conn>(
         conn: &'conn mut OracleConnection,
-        statement: Option<Cow<'static, str>>,
-    ) -> BoxFuture<'conn, Result<(), Error>> {
-        Box::pin(async move {
+        statement: Option<SqlStr>,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'conn {
+        async move {
             let depth = conn.transaction_depth;
             if depth > 0 {
-                // 嵌套事务：使用 SAVEPOINT
-                let savepoint = format!("SAVEPOINT _sqlx_savepoint_{depth}");
-                conn.execute(&*savepoint).await?;
+                let savepoint = AssertSqlSafe(format!("SAVEPOINT _sqlx_savepoint_{depth}")).into_sql_str();
+                conn.execute(savepoint).await?;
             } else if let Some(stmt) = statement {
-                // 用户自定义语句（极少使用）
-                conn.execute(&*stmt).await?;
+                conn.execute(stmt).await?;
             }
-            // depth == 0 且无自定义语句：Oracle 隐式事务，无需 SQL
             conn.transaction_depth += 1;
             Ok(())
-        })
+        }
     }
 
-    fn commit(conn: &mut OracleConnection) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move {
+    fn commit(conn: &mut OracleConnection) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
+        async move {
             let depth = conn.transaction_depth;
             if depth > 0 {
                 if depth == 1 {
-                    // 最外层事务：COMMIT
                     conn.execute("COMMIT").await?;
                 } else {
-                    // 释放保存点
-                    let savepoint = format!("RELEASE SAVEPOINT _sqlx_savepoint_{}", depth - 1);
-                    conn.execute(&*savepoint).await?;
+                    let savepoint = AssertSqlSafe(format!("RELEASE SAVEPOINT _sqlx_savepoint_{}", depth - 1)).into_sql_str();
+                    conn.execute(savepoint).await?;
                 }
                 conn.transaction_depth -= 1;
             }
             Ok(())
-        })
+        }
     }
 
-    fn rollback(conn: &mut OracleConnection) -> BoxFuture<'_, Result<(), Error>> {
-        Box::pin(async move {
+    fn rollback(conn: &mut OracleConnection) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
+        async move {
             let depth = conn.transaction_depth;
             if depth > 0 {
                 if depth == 1 {
-                    // 最外层事务：ROLLBACK
                     conn.execute("ROLLBACK").await?;
                 } else {
-                    // 回滚到保存点
-                    let savepoint = format!("ROLLBACK TO SAVEPOINT _sqlx_savepoint_{}", depth - 1);
-                    conn.execute(&*savepoint).await?;
+                    let savepoint = AssertSqlSafe(format!("ROLLBACK TO SAVEPOINT _sqlx_savepoint_{}", depth - 1)).into_sql_str();
+                    conn.execute(savepoint).await?;
                 }
                 conn.transaction_depth -= 1;
             }
             Ok(())
-        })
+        }
     }
 
     fn start_rollback(conn: &mut OracleConnection) {

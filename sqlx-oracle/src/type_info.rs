@@ -164,4 +164,140 @@ mod tests {
         let b = a.clone();
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn test_type_compatible_string_group() {
+        let strings = [OracleTypeInfo::Char, OracleTypeInfo::NChar, OracleTypeInfo::Varchar2,
+                       OracleTypeInfo::NVarchar2, OracleTypeInfo::Clob, OracleTypeInfo::NClob,
+                       OracleTypeInfo::Long, OracleTypeInfo::Boolean];
+        for a in &strings {
+            for b in &strings {
+                assert!(a.type_compatible(b), "{a:?} should be compatible with {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_type_compatible_number_group() {
+        let numbers = [OracleTypeInfo::Number, OracleTypeInfo::BinaryFloat, OracleTypeInfo::BinaryDouble];
+        for a in &numbers {
+            for b in &numbers {
+                assert!(a.type_compatible(b), "{a:?} should be compatible with {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_type_compatible_datetime_group() {
+        let dts = [OracleTypeInfo::Date, OracleTypeInfo::Timestamp,
+                   OracleTypeInfo::TimestampTZ, OracleTypeInfo::TimestampLTZ];
+        for a in &dts {
+            for b in &dts {
+                assert!(a.type_compatible(b), "{a:?} should be compatible with {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_type_compatible_binary_group() {
+        let binaries = [OracleTypeInfo::Raw, OracleTypeInfo::LongRaw, OracleTypeInfo::Blob];
+        for a in &binaries {
+            for b in &binaries {
+                assert!(a.type_compatible(b), "{a:?} should be compatible with {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_type_compatible_cross_group_incompatible() {
+        let string_t = OracleTypeInfo::Varchar2;
+        let number_t = OracleTypeInfo::Number;
+        let datetime_t = OracleTypeInfo::Date;
+        let binary_t = OracleTypeInfo::Raw;
+
+        assert!(!string_t.type_compatible(&number_t));
+        assert!(!string_t.type_compatible(&datetime_t));
+        assert!(!string_t.type_compatible(&binary_t));
+        assert!(!number_t.type_compatible(&datetime_t));
+        assert!(!number_t.type_compatible(&binary_t));
+        assert!(!datetime_t.type_compatible(&binary_t));
+    }
+
+    #[test]
+    fn test_type_compatible_same_variant() {
+        assert!(OracleTypeInfo::Null.type_compatible(&OracleTypeInfo::Null));
+        assert!(OracleTypeInfo::RowID.type_compatible(&OracleTypeInfo::RowID));
+        assert!(OracleTypeInfo::Unknown("A".into()).type_compatible(&OracleTypeInfo::Unknown("A".into())));
+    }
+
+    #[test]
+    fn test_type_compatible_unspecified_not_cross_group() {
+        // IntervalYM, IntervalDS, RowID, Unknown, Null are not in any group
+        let standalone = [
+            OracleTypeInfo::IntervalYM,
+            OracleTypeInfo::IntervalDS,
+            OracleTypeInfo::RowID,
+            OracleTypeInfo::Null,
+        ];
+        let other = OracleTypeInfo::Varchar2;
+        for s in &standalone {
+            assert!(!s.type_compatible(&other), "{s:?} should not be compatible with {other:?}");
+            assert!(!other.type_compatible(s), "{other:?} should not be compatible with {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_display_all_variants() {
+        assert_eq!(format!("{}", OracleTypeInfo::Char), "CHAR");
+        assert_eq!(format!("{}", OracleTypeInfo::NChar), "NCHAR");
+        assert_eq!(format!("{}", OracleTypeInfo::Varchar2), "VARCHAR2");
+        assert_eq!(format!("{}", OracleTypeInfo::NVarchar2), "NVARCHAR2");
+        assert_eq!(format!("{}", OracleTypeInfo::Clob), "CLOB");
+        assert_eq!(format!("{}", OracleTypeInfo::NClob), "NCLOB");
+        assert_eq!(format!("{}", OracleTypeInfo::Long), "LONG");
+        assert_eq!(format!("{}", OracleTypeInfo::Raw), "RAW");
+        assert_eq!(format!("{}", OracleTypeInfo::LongRaw), "LONG RAW");
+        assert_eq!(format!("{}", OracleTypeInfo::Blob), "BLOB");
+        assert_eq!(format!("{}", OracleTypeInfo::Number), "NUMBER");
+        assert_eq!(format!("{}", OracleTypeInfo::BinaryFloat), "BINARY_FLOAT");
+        assert_eq!(format!("{}", OracleTypeInfo::BinaryDouble), "BINARY_DOUBLE");
+        assert_eq!(format!("{}", OracleTypeInfo::Date), "DATE");
+        assert_eq!(format!("{}", OracleTypeInfo::Timestamp), "TIMESTAMP");
+        assert_eq!(format!("{}", OracleTypeInfo::TimestampTZ), "TIMESTAMP WITH TIME ZONE");
+        assert_eq!(format!("{}", OracleTypeInfo::TimestampLTZ), "TIMESTAMP WITH LOCAL TIME ZONE");
+        assert_eq!(format!("{}", OracleTypeInfo::IntervalYM), "INTERVAL YEAR TO MONTH");
+        assert_eq!(format!("{}", OracleTypeInfo::IntervalDS), "INTERVAL DAY TO SECOND");
+        assert_eq!(format!("{}", OracleTypeInfo::RowID), "ROWID");
+        assert_eq!(format!("{}", OracleTypeInfo::Boolean), "BOOLEAN");
+        assert_eq!(format!("{}", OracleTypeInfo::Null), "NULL");
+    }
+
+    #[test]
+    fn test_type_info_is_void_always_false() {
+        assert!(!OracleTypeInfo::Char.is_void());
+        assert!(!OracleTypeInfo::Number.is_void());
+        assert!(!OracleTypeInfo::Null.is_void());
+    }
+
+    #[test]
+    fn test_type_info_name_matches_display() {
+        let variants = [
+            OracleTypeInfo::Char,
+            OracleTypeInfo::Number,
+            OracleTypeInfo::BinaryFloat,
+            OracleTypeInfo::Date,
+            OracleTypeInfo::Timestamp,
+            OracleTypeInfo::TimestampTZ,
+            OracleTypeInfo::TimestampLTZ,
+            OracleTypeInfo::Blob,
+            OracleTypeInfo::Boolean,
+            OracleTypeInfo::Null,
+            OracleTypeInfo::RowID,
+            OracleTypeInfo::IntervalYM,
+            OracleTypeInfo::IntervalDS,
+        ];
+        for v in &variants {
+            assert_eq!(v.name(), &format!("{v}"), "name() should equal Display for {v:?}");
+        }
+    }
 }

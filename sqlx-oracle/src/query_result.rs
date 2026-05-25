@@ -21,3 +21,67 @@ impl Extend<OracleQueryResult> for OracleQueryResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_zero() {
+        let r = OracleQueryResult::default();
+        assert_eq!(r.rows_affected(), 0);
+    }
+
+    #[test]
+    fn test_rows_affected() {
+        let r = OracleQueryResult { rows_affected: 42 };
+        assert_eq!(r.rows_affected(), 42);
+    }
+
+    #[test]
+    fn test_extend_single() {
+        let mut r = OracleQueryResult { rows_affected: 10 };
+        r.extend([OracleQueryResult { rows_affected: 5 }]);
+        assert_eq!(r.rows_affected(), 15);
+    }
+
+    #[test]
+    fn test_extend_multiple() {
+        let mut r = OracleQueryResult { rows_affected: 0 };
+        r.extend([
+            OracleQueryResult { rows_affected: 1 },
+            OracleQueryResult { rows_affected: 2 },
+            OracleQueryResult { rows_affected: 3 },
+        ]);
+        assert_eq!(r.rows_affected(), 6);
+    }
+
+    #[test]
+    fn test_extend_empty() {
+        let mut r = OracleQueryResult { rows_affected: 7 };
+        r.extend([]);
+        assert_eq!(r.rows_affected(), 7);
+    }
+
+    #[test]
+    fn test_extend_large() {
+        let mut r = OracleQueryResult { rows_affected: 0 };
+        let many: Vec<_> = (0..100).map(|i| OracleQueryResult { rows_affected: i }).collect();
+        r.extend(many);
+        // Sum of 0..100 = 4950
+        assert_eq!(r.rows_affected(), 4950);
+    }
+
+    #[test]
+    fn test_debug() {
+        let r = OracleQueryResult { rows_affected: 99 };
+        let debug = format!("{r:?}");
+        assert!(debug.contains("99"));
+    }
+
+    #[test]
+    fn test_default_trait() {
+        let r: OracleQueryResult = Default::default();
+        assert_eq!(r.rows_affected(), 0);
+    }
+}
