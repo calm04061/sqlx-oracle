@@ -54,10 +54,14 @@ pub struct OracleArguments {
 impl Arguments for OracleArguments {
     type Database = Oracle;
 
+    /// 预分配绑定值缓冲区容量。
     fn reserve(&mut self, additional: usize, _size: usize) {
         self.buffer.values.reserve(additional);
     }
 
+    /// 编码并添加一个绑定值到参数列表。
+    ///
+    /// 如果 `Encode::encode` 返回 `IsNull::Yes`，则插入 `OracleBindValue::Null`。
     fn add<'t, T>(&mut self, value: T) -> Result<(), BoxDynError>
     where
         T: Encode<'t, Self::Database> + Type<Self::Database>,
@@ -69,10 +73,12 @@ impl Arguments for OracleArguments {
         Ok(())
     }
 
+    /// 返回已绑定的参数个数。
     fn len(&self) -> usize {
         self.buffer.values.len()
     }
 
+    /// 以 `$N` 格式写入占位符（后续由 `convert_placeholders` 转为 Oracle 的 `:N` 格式）。
     fn format_placeholder<W: Write>(&self, writer: &mut W) -> std::fmt::Result {
         write!(writer, "${}", self.buffer.values.len())
     }
@@ -83,6 +89,10 @@ sqlx_core::impl_into_arguments_for_arguments!(OracleArguments);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // OracleBindValue 变体构造
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_bind_value_null() {
@@ -129,6 +139,10 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // OracleArgumentBuffer 基本操作
+    // -----------------------------------------------------------------------
+
     #[test]
     fn test_buffer_push_and_len() {
         let mut buf = OracleArgumentBuffer::default();
@@ -142,6 +156,10 @@ mod tests {
         buf.push(OracleBindValue::String("x".into()));
         assert_eq!(buf.len(), 2);
     }
+
+    // -----------------------------------------------------------------------
+    // OracleArguments 构造与 add
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_arguments_default() {

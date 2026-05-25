@@ -9,12 +9,14 @@ pub struct OracleQueryResult {
 }
 
 impl OracleQueryResult {
+    /// 返回 DML 语句影响的行数。
     pub fn rows_affected(&self) -> u64 {
         self.rows_affected
     }
 }
 
 impl Extend<OracleQueryResult> for OracleQueryResult {
+    /// 累加多个查询结果的影响行数。
     fn extend<T: IntoIterator<Item = OracleQueryResult>>(&mut self, iter: T) {
         for elem in iter {
             self.rows_affected += elem.rows_affected;
@@ -25,6 +27,10 @@ impl Extend<OracleQueryResult> for OracleQueryResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // 基本构造与默认值
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_default_zero() {
@@ -37,6 +43,10 @@ mod tests {
         let r = OracleQueryResult { rows_affected: 42 };
         assert_eq!(r.rows_affected(), 42);
     }
+
+    // -----------------------------------------------------------------------
+    // Extend 累加逻辑
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_extend_single() {
@@ -68,9 +78,13 @@ mod tests {
         let mut r = OracleQueryResult { rows_affected: 0 };
         let many: Vec<_> = (0..100).map(|i| OracleQueryResult { rows_affected: i }).collect();
         r.extend(many);
-        // Sum of 0..100 = 4950
+        // 0..100 的和 = 4950
         assert_eq!(r.rows_affected(), 4950);
     }
+
+    // -----------------------------------------------------------------------
+    // Debug / Default trait
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_debug() {

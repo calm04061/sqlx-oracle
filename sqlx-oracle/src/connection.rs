@@ -444,14 +444,17 @@ impl Connection for OracleConnection {
     type Database = Oracle;
     type Options = OracleConnectOptions;
 
+    /// 关闭连接（sibyl 自动处理会话生命周期，此处为 no-op）。
     fn close(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
         async move { Ok(()) }
     }
 
+    /// 强制关闭连接（no-op，同 `close`）。
     fn close_hard(self) -> impl std::future::Future<Output = Result<(), Error>> + Send + 'static {
         async move { Ok(()) }
     }
 
+    /// 通过 `SELECT 1 FROM DUAL` 检查数据库是否存活。
     fn ping(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
         async move {
             let stmt = self.session.prepare("SELECT 1 FROM DUAL").await.map_err(|e| {
@@ -464,6 +467,7 @@ impl Connection for OracleConnection {
         }
     }
 
+    /// 开始事务（深度 0→1 时隐式开启，不做任何 SQL 操作）。
     fn begin(
         &mut self,
     ) -> impl std::future::Future<Output = Result<Transaction<'_, Self::Database>, Error>> + Send + '_
@@ -473,6 +477,7 @@ impl Connection for OracleConnection {
         Transaction::begin(self, None)
     }
 
+    /// 使用自定义起始语句开始事务（透传给 `TransactionManager::begin`）。
     fn begin_with(
         &mut self,
         statement: impl sqlx_core::sql_str::SqlSafeStr,
@@ -485,10 +490,12 @@ impl Connection for OracleConnection {
 
     fn shrink_buffers(&mut self) {}
 
+    /// flush（no-op，Oracle 无类似 MySQL 的缓冲区刷新操作）。
     fn flush(&mut self) -> impl std::future::Future<Output = Result<(), Error>> + Send + '_ {
         async move { Ok(()) }
     }
 
+    /// 不需要 flush。
     fn should_flush(&self) -> bool {
         false
     }
@@ -497,6 +504,9 @@ impl Connection for OracleConnection {
 impl<'c> Executor<'c> for &'c mut OracleConnection {
     type Database = Oracle;
 
+    /// 执行查询并返回混合流（DML 结果或行）。
+    ///
+    /// 从 `Execute` trait 对象提取 SQL 和参数，调用 `execute_or_query` 执行。
     fn fetch_many<'e, 'q, E>(
         self,
         mut query: E,
@@ -532,6 +542,9 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
         .boxed()
     }
 
+    /// 执行查询并返回可选的单行结果。
+    ///
+    /// 内部使用 `fetch_many` 流，只取第一个 `Either::Right(Row)`。
     fn fetch_optional<'e, 'q, E>(
         self,
         mut query: E,
@@ -573,6 +586,9 @@ impl<'c> Executor<'c> for &'c mut OracleConnection {
         })
     }
 
+    /// 预编译 SQL 并返回 `OracleStatement`（含列元数据）。
+    ///
+    /// 如果提供了参数类型信息，会先进行占位符转换。
     fn prepare_with<'e>(
         self,
         sql: SqlStr,
@@ -673,6 +689,10 @@ fn build_sibyl_args(args: &mut OracleArguments) -> Vec<Box<dyn sibyl::ToSql>> {
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------------
+    // sql_is_query：判断 SQL 类型
+    // -----------------------------------------------------------------------
+
     #[test]
     fn test_sql_is_query_select() {
         assert!(OracleConnection::sql_is_query("SELECT * FROM dual"));
@@ -693,6 +713,10 @@ mod tests {
         assert!(!OracleConnection::sql_is_query("MERGE INTO t USING ..."));
         assert!(!OracleConnection::sql_is_query(""));
     }
+
+    // -----------------------------------------------------------------------
+    // convert_placeholders：占位符转换（? → :n, $N → :n）
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_convert_placeholders_no_args() {
@@ -748,6 +772,10 @@ mod tests {
         let expected = "SELECT '$1' FROM t WHERE id = :1";
         assert_eq!(OracleConnection::convert_placeholders(sql, 1), expected);
     }
+
+    // -----------------------------------------------------------------------
+    // build_sibyl_args：参数转换
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_build_sibyl_args_empty() {

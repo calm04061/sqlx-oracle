@@ -15,14 +15,17 @@ pub struct OracleColumn {
 impl Column for OracleColumn {
     type Database = Oracle;
 
+    /// 返回列在结果集中的序号（从 0 开始）。
     fn ordinal(&self) -> usize {
         self.ordinal
     }
 
+    /// 返回列名（来自 OCI 元数据）。
     fn name(&self) -> &str {
         &self.name
     }
 
+    /// 返回 Oracle 数据类型信息。
     fn type_info(&self) -> &OracleTypeInfo {
         &self.type_info
     }
@@ -32,6 +35,10 @@ impl Column for OracleColumn {
 mod tests {
     use super::*;
     use sqlx_core::column::Column;
+
+    // -----------------------------------------------------------------------
+    // 基本构造和 trait 方法
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_column_construction() {
@@ -55,6 +62,10 @@ mod tests {
         assert_eq!(col.ordinal(), 5);
     }
 
+    // -----------------------------------------------------------------------
+    // 列名格式
+    // -----------------------------------------------------------------------
+
     #[test]
     fn test_column_name_various() {
         let col = OracleColumn {
@@ -71,6 +82,10 @@ mod tests {
         };
         assert_eq!(col.name(), "SYS_C0012345");
     }
+
+    // -----------------------------------------------------------------------
+    // 类型映射
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_column_type_info_different_types() {
@@ -91,6 +106,10 @@ mod tests {
             assert_eq!(col.type_info(), t);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Debug / Clone
+    // -----------------------------------------------------------------------
 
     #[test]
     fn test_column_debug() {
