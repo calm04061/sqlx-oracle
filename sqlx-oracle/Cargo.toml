@@ -20,7 +20,11 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 log = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
+chrono = { workspace = true, optional = true }
+
+[features]
+default = ["chrono"]
+chrono = ["dep:chrono"]
 
 [lib]
 name = "sqlx_oracle"

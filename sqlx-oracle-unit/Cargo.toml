@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 description = "Integration tests for the sqlx-oracle driver"
 [dev-dependencies]
-sqlx-oracle = { path = "../sqlx-oracle" }
-sqlx = { workspace = true, features = ["runtime-tokio"] }
+sqlx-oracle = { path = "../sqlx-oracle", features = ["chrono"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 dotenvy = { workspace = true }
 chrono = { workspace = true }

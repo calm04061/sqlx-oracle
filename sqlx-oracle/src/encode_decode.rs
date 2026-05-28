@@ -400,142 +400,153 @@ impl Type<Oracle> for Vec<u8> {
     }
 }
 
-// ===========================================================================
-// chrono 时间类型 —— 连接时 NLS 已设为 ISO 8601 格式
-// ===========================================================================
-//
-// NaiveDateTime → TIMESTAMP
-// NaiveDate     → DATE（可能包含时间部分，尝试两种格式）
-// NaiveTime     → DATE（Oracle 总是返回完整时间戳，取时间部分）
-// DateTime<Utc> → TIMESTAMP WITH TIME ZONE
+#[cfg(feature = "chrono")]
+mod chrono_impls {
+    //! chrono 时间类型 —— 连接时 NLS 已设为 ISO 8601 格式
+    //!
+    //! NaiveDateTime → TIMESTAMP
+    //! NaiveDate     → DATE（可能包含时间部分，尝试两种格式）
+    //! NaiveTime     → DATE（Oracle 总是返回完整时间戳，取时间部分）
+    //! DateTime<Utc> → TIMESTAMP WITH TIME ZONE
 
-fn fmt_subsec_micros(nanos: u32) -> String {
-    if nanos == 0 {
-        String::new()
-    } else {
-        format!(".{:06}", nanos / 1000)
-    }
-}
+    use super::decode_text;
+    use crate::Oracle;
+    use crate::OracleTypeInfo;
+    use crate::arguments::{OracleArgumentBuffer, OracleBindValue};
+    use crate::value::OracleValueRef;
+    use sqlx_core::decode::Decode;
+    use sqlx_core::encode::{Encode, IsNull};
+    use sqlx_core::error::BoxDynError;
+    use sqlx_core::types::Type;
 
-impl<'q> Encode<'q, Oracle> for chrono::NaiveDateTime {
-    fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        let nanos = self.and_utc().timestamp_subsec_nanos();
-        let s = format!("{}{}", self.format("%Y-%m-%d %H:%M:%S"), fmt_subsec_micros(nanos));
-        buf.push(OracleBindValue::String(s));
-        Ok(IsNull::No)
-    }
-
-    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        let nanos = self.and_utc().timestamp_subsec_nanos();
-        let s = format!("{}{}", self.format("%Y-%m-%d %H:%M:%S"), fmt_subsec_micros(nanos));
-        buf.push(OracleBindValue::String(s));
-        Ok(IsNull::No)
-    }
-}
-
-impl<'r> Decode<'r, Oracle> for chrono::NaiveDateTime {
-    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
-        let s = decode_text(value)?;
-        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-            .map_err(|e| format!("failed to parse NaiveDateTime: {e}").into())
-    }
-}
-
-impl Type<Oracle> for chrono::NaiveDateTime {
-    fn type_info() -> OracleTypeInfo {
-        OracleTypeInfo::Timestamp
-    }
-}
-
-impl<'q> Encode<'q, Oracle> for chrono::NaiveDate {
-    fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%Y-%m-%d").to_string()));
-        Ok(IsNull::No)
-    }
-
-    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%Y-%m-%d").to_string()));
-        Ok(IsNull::No)
-    }
-}
-
-impl<'r> Decode<'r, Oracle> for chrono::NaiveDate {
-    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
-        let s = decode_text(value)?;
-        chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
-            .or_else(|_| {
-                chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
-                    .map(|dt| dt.date())
-            })
-            .map_err(|e| format!("failed to parse NaiveDate: {e}").into())
-    }
-}
-
-impl Type<Oracle> for chrono::NaiveDate {
-    fn type_info() -> OracleTypeInfo {
-        OracleTypeInfo::Date
-    }
-}
-
-impl<'q> Encode<'q, Oracle> for chrono::NaiveTime {
-    fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("2000-01-01 %H:%M:%S").to_string()));
-        Ok(IsNull::No)
-    }
-
-    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("2000-01-01 %H:%M:%S").to_string()));
-        Ok(IsNull::No)
-    }
-}
-
-impl<'r> Decode<'r, Oracle> for chrono::NaiveTime {
-    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
-        let s = decode_text(value)?;
-        chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")
-            .or_else(|_| {
-                chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-                    .map(|dt| dt.time())
-            })
-            .map_err(|e| format!("failed to parse NaiveTime: {e}").into())
-    }
-}
-
-impl Type<Oracle> for chrono::NaiveTime {
-    fn type_info() -> OracleTypeInfo {
-        OracleTypeInfo::Date
-    }
-}
-
-impl<'q> Encode<'q, Oracle> for chrono::DateTime<chrono::Utc> {
-    fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()));
-        Ok(IsNull::No)
-    }
-
-    fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
-        buf.push(OracleBindValue::String(self.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()));
-        Ok(IsNull::No)
-    }
-}
-
-impl<'r> Decode<'r, Oracle> for chrono::DateTime<chrono::Utc> {
-    fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
-        let s = decode_text(value)?;
-        // 优先：有时区信息
-        if let Ok(dt) = chrono::DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f %:z") {
-            return Ok(dt.with_timezone(&chrono::Utc));
+    fn fmt_subsec_micros(nanos: u32) -> String {
+        if nanos == 0 {
+            String::new()
+        } else {
+            format!(".{:06}", nanos / 1000)
         }
-        // 无时区：先解析为 NaiveDateTime，再假定为 UTC
-        let naive = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))?;
-        Ok(chrono::DateTime::from_naive_utc_and_offset(naive, chrono::Utc))
     }
-}
 
-impl Type<Oracle> for chrono::DateTime<chrono::Utc> {
-    fn type_info() -> OracleTypeInfo {
-        OracleTypeInfo::TimestampTZ
+    impl<'q> Encode<'q, Oracle> for chrono::NaiveDateTime {
+        fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            let nanos = self.and_utc().timestamp_subsec_nanos();
+            let s = format!("{}{}", self.format("%Y-%m-%d %H:%M:%S"), fmt_subsec_micros(nanos));
+            buf.push(OracleBindValue::String(s));
+            Ok(IsNull::No)
+        }
+
+        fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            let nanos = self.and_utc().timestamp_subsec_nanos();
+            let s = format!("{}{}", self.format("%Y-%m-%d %H:%M:%S"), fmt_subsec_micros(nanos));
+            buf.push(OracleBindValue::String(s));
+            Ok(IsNull::No)
+        }
+    }
+
+    impl<'r> Decode<'r, Oracle> for chrono::NaiveDateTime {
+        fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+            let s = decode_text(value)?;
+            chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                .map_err(|e| format!("failed to parse NaiveDateTime: {e}").into())
+        }
+    }
+
+    impl Type<Oracle> for chrono::NaiveDateTime {
+        fn type_info() -> OracleTypeInfo {
+            OracleTypeInfo::Timestamp
+        }
+    }
+
+    impl<'q> Encode<'q, Oracle> for chrono::NaiveDate {
+        fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            buf.push(OracleBindValue::String(self.format("%Y-%m-%d").to_string()));
+            Ok(IsNull::No)
+        }
+
+        fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            buf.push(OracleBindValue::String(self.format("%Y-%m-%d").to_string()));
+            Ok(IsNull::No)
+        }
+    }
+
+    impl<'r> Decode<'r, Oracle> for chrono::NaiveDate {
+        fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+            let s = decode_text(value)?;
+            chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d")
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                        .map(|dt| dt.date())
+                })
+                .map_err(|e| format!("failed to parse NaiveDate: {e}").into())
+        }
+    }
+
+    impl Type<Oracle> for chrono::NaiveDate {
+        fn type_info() -> OracleTypeInfo {
+            OracleTypeInfo::Date
+        }
+    }
+
+    impl<'q> Encode<'q, Oracle> for chrono::NaiveTime {
+        fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            buf.push(OracleBindValue::String(self.format("2000-01-01 %H:%M:%S").to_string()));
+            Ok(IsNull::No)
+        }
+
+        fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            buf.push(OracleBindValue::String(self.format("2000-01-01 %H:%M:%S").to_string()));
+            Ok(IsNull::No)
+        }
+    }
+
+    impl<'r> Decode<'r, Oracle> for chrono::NaiveTime {
+        fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+            let s = decode_text(value)?;
+            chrono::NaiveTime::parse_from_str(&s, "%H:%M:%S%.f")
+                .or_else(|_| {
+                    chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                        .map(|dt| dt.time())
+                })
+                .map_err(|e| format!("failed to parse NaiveTime: {e}").into())
+        }
+    }
+
+    impl Type<Oracle> for chrono::NaiveTime {
+        fn type_info() -> OracleTypeInfo {
+            OracleTypeInfo::Date
+        }
+    }
+
+    impl<'q> Encode<'q, Oracle> for chrono::DateTime<chrono::Utc> {
+        fn encode(self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            buf.push(OracleBindValue::String(self.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()));
+            Ok(IsNull::No)
+        }
+
+        fn encode_by_ref(&self, buf: &mut OracleArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            buf.push(OracleBindValue::String(self.format("%Y-%m-%d %H:%M:%S%.f %:z").to_string()));
+            Ok(IsNull::No)
+        }
+    }
+
+    impl<'r> Decode<'r, Oracle> for chrono::DateTime<chrono::Utc> {
+        fn decode(value: OracleValueRef<'r>) -> Result<Self, BoxDynError> {
+            let s = decode_text(value)?;
+            // 优先：有时区信息
+            if let Ok(dt) = chrono::DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f %:z") {
+                return Ok(dt.with_timezone(&chrono::Utc));
+            }
+            // 无时区：先解析为 NaiveDateTime，再假定为 UTC
+            let naive = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f")
+                .or_else(|_| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S"))?;
+            Ok(chrono::DateTime::from_naive_utc_and_offset(naive, chrono::Utc))
+        }
+    }
+
+    impl Type<Oracle> for chrono::DateTime<chrono::Utc> {
+        fn type_info() -> OracleTypeInfo {
+            OracleTypeInfo::TimestampTZ
+        }
     }
 }
 
@@ -545,6 +556,9 @@ mod tests {
     use crate::OracleArguments;
     use crate::OracleValueRef;
     use sqlx_core::arguments::Arguments;
+
+    #[cfg(feature = "chrono")]
+    use chrono::{Datelike, Timelike};
 
     // -----------------------------------------------------------------------
     // 辅助函数
@@ -883,159 +897,6 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 日期时间
-    // -----------------------------------------------------------------------
-
-    use chrono::{NaiveDate, NaiveDateTime, NaiveTime, DateTime, Utc, TimeZone, Datelike, Timelike};
-
-    #[test]
-    fn test_encode_naive_datetime() {
-        let dt = NaiveDateTime::parse_from_str("2024-01-15 10:30:45", "%Y-%m-%d %H:%M:%S").unwrap();
-        let v = encode_value(dt);
-        assert!(matches!(&v, OracleBindValue::String(s) if s.starts_with("2024-01-15 10:30:45")));
-    }
-
-    #[test]
-    fn test_decode_naive_datetime() {
-        let decoded: NaiveDateTime =
-            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::Timestamp);
-        assert_eq!(decoded.year(), 2024);
-        assert_eq!(decoded.month(), 1);
-        assert_eq!(decoded.day(), 15);
-        assert_eq!(decoded.hour(), 10);
-        assert_eq!(decoded.minute(), 30);
-        assert_eq!(decoded.second(), 45);
-    }
-
-    #[test]
-    fn test_naive_datetime_roundtrip() {
-        let dt = NaiveDateTime::parse_from_str("2024-01-15 10:30:45", "%Y-%m-%d %H:%M:%S").unwrap();
-        roundtrip(dt, OracleTypeInfo::Timestamp);
-
-        let dt = NaiveDateTime::parse_from_str(
-            "2024-06-15 23:59:59.123456",
-            "%Y-%m-%d %H:%M:%S%.f",
-        )
-        .unwrap();
-        roundtrip(dt, OracleTypeInfo::Timestamp);
-    }
-
-    #[test]
-    fn test_naive_datetime_subsecond() {
-        let dt = NaiveDateTime::parse_from_str(
-            "2024-01-01 00:00:00.123456",
-            "%Y-%m-%d %H:%M:%S%.f",
-        )
-        .unwrap();
-        let v = encode_value(dt);
-        if let OracleBindValue::String(s) = v {
-            assert!(s.contains(".123456"), "expected subsecond precision, got {s}");
-        } else {
-            panic!("expected String bind value");
-        }
-    }
-
-    #[test]
-    fn test_decode_naive_date() {
-        let decoded: NaiveDate = decode_text_as("2024-01-15", OracleTypeInfo::Date);
-        assert_eq!(decoded, NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
-    }
-
-    #[test]
-    fn test_decode_naive_date_from_datetime() {
-        // Oracle DATE 列返回完整时间戳，需能从时间戳中提取日期
-        let decoded: NaiveDate =
-            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::Date);
-        assert_eq!(decoded, NaiveDate::from_ymd_opt(2024, 1, 15).unwrap());
-    }
-
-    #[test]
-    fn test_naive_date_roundtrip() {
-        roundtrip(
-            NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(),
-            OracleTypeInfo::Date,
-        );
-        roundtrip(
-            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-            OracleTypeInfo::Date,
-        );
-        roundtrip(
-            NaiveDate::from_ymd_opt(9999, 12, 31).unwrap(),
-            OracleTypeInfo::Date,
-        );
-    }
-
-    #[test]
-    fn test_decode_naive_time() {
-        let decoded: NaiveTime =
-            decode_text_as("10:30:45", OracleTypeInfo::Date);
-        assert_eq!(decoded, NaiveTime::from_hms_opt(10, 30, 45).unwrap());
-    }
-
-    #[test]
-    fn test_decode_naive_time_from_datetime() {
-        // Oracle DATE 列返回完整时间戳，需能提取时间部分
-        let decoded: NaiveTime =
-            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::Date);
-        assert_eq!(decoded, NaiveTime::from_hms_opt(10, 30, 45).unwrap());
-    }
-
-    #[test]
-    fn test_naive_time_roundtrip() {
-        roundtrip(
-            NaiveTime::from_hms_opt(10, 30, 45).unwrap(),
-            OracleTypeInfo::Date,
-        );
-        roundtrip(
-            NaiveTime::from_hms_opt(23, 59, 59).unwrap(),
-            OracleTypeInfo::Date,
-        );
-    }
-
-    #[test]
-    fn test_encode_datetime_utc() {
-        let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 45).unwrap();
-        let v = encode_value(dt);
-        assert!(matches!(&v, OracleBindValue::String(s) if s.contains("2024-01-15 10:30:45")));
-    }
-
-    #[test]
-    fn test_decode_datetime_utc() {
-        let decoded: DateTime<Utc> =
-            decode_text_as("2024-01-15 10:30:45 +00:00", OracleTypeInfo::TimestampTZ);
-        assert_eq!(decoded.year(), 2024);
-        assert_eq!(decoded.month(), 1);
-        assert_eq!(decoded.day(), 15);
-        assert_eq!(decoded.hour(), 10);
-        assert_eq!(decoded.minute(), 30);
-    }
-
-    #[test]
-    fn test_decode_datetime_utc_without_tz() {
-        // 无时区后缀时默认为 UTC
-        let decoded: DateTime<Utc> =
-            decode_text_as("2024-01-15 10:30:45", OracleTypeInfo::TimestampTZ);
-        assert_eq!(decoded.hour(), 10);
-        assert_eq!(decoded.minute(), 30);
-    }
-
-    #[test]
-    fn test_datetime_utc_roundtrip() {
-        let dt = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 45).unwrap();
-        roundtrip(dt, OracleTypeInfo::TimestampTZ);
-
-        let dt = Utc.with_ymd_and_hms(2024, 6, 15, 23, 59, 59).unwrap();
-        roundtrip(dt, OracleTypeInfo::TimestampTZ);
-    }
-
-    #[test]
-    fn test_datetime_utc_subsecond() {
-        let dt = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()
-            + chrono::Duration::microseconds(123_456);
-        roundtrip(dt, OracleTypeInfo::TimestampTZ);
-    }
-
-    // -----------------------------------------------------------------------
     // 空值
     // -----------------------------------------------------------------------
 
@@ -1089,9 +950,13 @@ mod tests {
         assert_eq!(<usize as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
         assert_eq!(<bool as Type<Oracle>>::type_info(), OracleTypeInfo::Number);
         assert_eq!(<Vec<u8> as Type<Oracle>>::type_info(), OracleTypeInfo::Raw);
+        #[cfg(feature = "chrono")]
         assert_eq!(<chrono::NaiveDateTime as Type<Oracle>>::type_info(), OracleTypeInfo::Timestamp);
+        #[cfg(feature = "chrono")]
         assert_eq!(<chrono::NaiveDate as Type<Oracle>>::type_info(), OracleTypeInfo::Date);
+        #[cfg(feature = "chrono")]
         assert_eq!(<chrono::NaiveTime as Type<Oracle>>::type_info(), OracleTypeInfo::Date);
+        #[cfg(feature = "chrono")]
         assert_eq!(<chrono::DateTime<chrono::Utc> as Type<Oracle>>::type_info(), OracleTypeInfo::TimestampTZ);
     }
 
@@ -1230,42 +1095,47 @@ mod tests {
         roundtrip(v, OracleTypeInfo::Number);
     }
 
+    #[cfg(feature = "chrono")]
     #[test]
     fn test_naive_datetime_subsecond_edge_cases() {
-        let dt1 = NaiveDateTime::parse_from_str("2024-01-01 00:00:00.000000", "%Y-%m-%d %H:%M:%S%.f").unwrap();
-        let dt2 = NaiveDateTime::parse_from_str("2024-01-01 00:00:00.999999", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+        let dt1 = chrono::NaiveDateTime::parse_from_str("2024-01-01 00:00:00.000000", "%Y-%m-%d %H:%M:%S%.f").unwrap();
+        let dt2 = chrono::NaiveDateTime::parse_from_str("2024-01-01 00:00:00.999999", "%Y-%m-%d %H:%M:%S%.f").unwrap();
         roundtrip(dt1, OracleTypeInfo::Timestamp);
         roundtrip(dt2, OracleTypeInfo::Timestamp);
     }
 
+    #[cfg(feature = "chrono")]
     #[test]
     fn test_naive_date_leap_year() {
-        roundtrip(NaiveDate::from_ymd_opt(2024, 2, 29).unwrap(), OracleTypeInfo::Date);
-        roundtrip(NaiveDate::from_ymd_opt(2000, 2, 29).unwrap(), OracleTypeInfo::Date);
-        roundtrip(NaiveDate::from_ymd_opt(1900, 2, 28).unwrap(), OracleTypeInfo::Date);
+        roundtrip(chrono::NaiveDate::from_ymd_opt(2024, 2, 29).unwrap(), OracleTypeInfo::Date);
+        roundtrip(chrono::NaiveDate::from_ymd_opt(2000, 2, 29).unwrap(), OracleTypeInfo::Date);
+        roundtrip(chrono::NaiveDate::from_ymd_opt(1900, 2, 28).unwrap(), OracleTypeInfo::Date);
     }
 
+    #[cfg(feature = "chrono")]
     #[test]
     fn test_datetime_utc_positive_offset() {
         let s = "2024-01-15 18:30:45 +08:00";
-        let decoded: DateTime<Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
-        assert_eq!(decoded.hour(), 10); // 18:30 +08:00 = 10:30 UTC
+        let decoded: chrono::DateTime<chrono::Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 10);
         assert_eq!(decoded.minute(), 30);
     }
 
+    #[cfg(feature = "chrono")]
     #[test]
     fn test_datetime_utc_negative_offset() {
         let s = "2024-01-15 06:30:45 -05:00";
-        let decoded: DateTime<Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
-        assert_eq!(decoded.hour(), 11); // 06:30 -05:00 = 11:30 UTC
+        let decoded: chrono::DateTime<chrono::Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 11);
         assert_eq!(decoded.minute(), 30);
     }
 
+    #[cfg(feature = "chrono")]
     #[test]
     fn test_datetime_utc_with_fractional_tz() {
         let s = "2024-01-15 10:15:45 +05:30";
-        let decoded: DateTime<Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
-        assert_eq!(decoded.hour(), 4);  // 10:15 +05:30 = 04:45 UTC
+        let decoded: chrono::DateTime<chrono::Utc> = decode_text_as(s, OracleTypeInfo::TimestampTZ);
+        assert_eq!(decoded.hour(), 4);
         assert_eq!(decoded.minute(), 45);
     }
 

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build
+        run: cargo build
+      - name: Unit tests
+        run: cargo test -p sqlx-oracle --lib
+
+  integration:
+    needs: build
+    runs-on: ubuntu-latest
+    services:
+      oracle:
+        image: gvenzl/oracle-xe:21-slim-faststart
+        env:
+          ORACLE_PASSWORD: ci_test
+        ports:
+          - 1521:1521
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Wait for Oracle
+        run: |
+          echo "Waiting for Oracle..."
+          for i in $(seq 40); do
+            if nc -z localhost 1521 2>/dev/null; then
+              echo "Oracle ready after ${i}0s"
+              break
+            fi
+            sleep 10
+          done
+      - name: Integration tests
+        run: cargo test -p sqlx-oracle-unit --test integration -- --test-threads=1 --nocapture
+        env:
+          DATABASE_URL: oracle://system:ci_test@localhost:1521/XEPDB1
