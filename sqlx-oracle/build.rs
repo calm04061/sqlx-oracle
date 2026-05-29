@@ -73,6 +73,12 @@ fn main() {
     // 通知链接器搜索路径
     println!("cargo:rustc-link-search={}", lib_dir.display());
 
+    // Linux: 允许 libclntsh.so 中未解析的符号（Oracle 内部符号通过 dlopen 在运行时加载）
+    if target_os == "linux" {
+        println!("cargo:rustc-link-arg=-Wl,--allow-shlib-undefined");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+    }
+
     // macOS 处理 dylib 的 install name 和代码签名
     if target_os == "macos" {
         let libclntsh = lib_dir.join("libclntsh.dylib.23.1");
