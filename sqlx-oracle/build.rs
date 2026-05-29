@@ -166,14 +166,20 @@ fn extract_dmg(url: &str, dest: &Path) {
     let _ = std::fs::remove_file(&dmg);
 }
 
-/// 如果解压创建了单一子目录，将其内容上移并删除空壳。
+/// 如果解压创建了单一子目录或 `instantclient_*` 子目录，将其内容上移并删除空壳。
 fn flatten_single_subdir(dir: &Path) {
     let entries: Vec<_> = std::fs::read_dir(dir).unwrap()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .collect();
-    if entries.len() == 1 {
-        let sub = entries[0].path();
+    // 查找 instantclient_* 子目录（Oracle zip 内含版本目录如 instantclient_23_26）
+    let sub = entries.iter()
+        .find(|e| e.file_name().to_string_lossy().starts_with("instantclient"))
+        .map(|e| e.path())
+        .or_else(|| {
+            if entries.len() == 1 { Some(entries[0].path()) } else { None }
+        });
+    if let Some(sub) = sub {
         for entry in std::fs::read_dir(&sub).unwrap() {
             let entry = entry.unwrap();
             let name = entry.file_name();
