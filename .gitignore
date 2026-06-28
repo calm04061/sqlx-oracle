@@ -1,0 +1,8 @@
+# Rust 编译输出
+target
+
+# IntelliJ IDEA 项目设置
+.idea
+
+wallet
+.env
